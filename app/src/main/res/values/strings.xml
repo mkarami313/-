@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">همراهِ طیف</string>
+    <!--
+      Note: screen-level UI strings are kept inline (in Persian) inside the Compose
+      code for readability during this phase. Centralizing them here is a planned
+      follow-up for full localization (see docs/STATUS.md).
+    -->
+</resources>

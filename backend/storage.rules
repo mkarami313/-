@@ -1,0 +1,39 @@
+rules_version = '2';
+
+// Cloud Storage rules for «همراهِ طیف».
+//
+// In v1 the app uploads NO sensitive files (medical files and child images are disabled,
+// DM attachments are disabled). The only storage path contemplated is private verification
+// documents, which must be readable/writable by admins only and uploadable by the owner.
+//
+// REVIEWABLE DRAFT — test with the emulator and review before production.
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() { return request.auth != null; }
+    function isAdmin() { return isSignedIn() && request.auth.token.admin == true; }
+
+    // Verification documents: the owner can upload their own; only admins can read them.
+    // Deleting is allowed for the owner (to withdraw) and admins (to remove after review).
+    match /verification/{uid}/{fileName} {
+      allow write: if isSignedIn() && request.auth.uid == uid
+        && request.resource.size < 10 * 1024 * 1024; // 10MB cap
+      allow read: if isAdmin();
+      allow delete: if isAdmin() || (isSignedIn() && request.auth.uid == uid);
+    }
+
+    // Optional, low-sensitivity profile photos (public-read, owner-write). Enable only if
+    // you add photo upload to the client.
+    match /profilePhotos/{uid}/{fileName} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && request.auth.uid == uid
+        && request.resource.contentType.matches('image/.*')
+        && request.resource.size < 5 * 1024 * 1024;
+    }
+
+    // Everything else is denied by default.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

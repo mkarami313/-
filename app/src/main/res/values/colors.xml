@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Calm, low-stress palette. Kept in sync with ui/theme/Color.kt. -->
+    <color name="brand_primary">#4C8C7D</color>
+    <color name="brand_background">#F5F7F6</color>
+</resources>

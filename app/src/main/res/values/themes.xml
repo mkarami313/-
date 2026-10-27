@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Base application theme. The actual colors/typography are driven by the
+         Compose theme (ui/theme). This XML theme only controls the splash window
+         and system bars before Compose takes over. -->
+    <style name="Theme.HamraheTeyf" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/brand_background</item>
+        <item name="android:statusBarColor">@color/brand_primary</item>
+        <item name="android:navigationBarColor">@color/brand_background</item>
+    </style>
+</resources>

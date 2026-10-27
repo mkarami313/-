@@ -1,0 +1,30 @@
+{
+  "_comment": "SAMPLE ONLY — contains NO real keys. Copy to app/google-services.json and replace every <...> placeholder with values from your own Firebase project (Project settings → Your apps → Android). Do NOT commit the real file; it is already in .gitignore. See docs/BACKEND_SETUP.md.",
+  "project_info": {
+    "project_number": "<YOUR_PROJECT_NUMBER>",
+    "project_id": "<YOUR_PROJECT_ID>",
+    "storage_bucket": "<YOUR_PROJECT_ID>.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "<YOUR_MOBILE_SDK_APP_ID>",
+        "android_client_info": {
+          "package_name": "com.hamraheteyf.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "<YOUR_ANDROID_API_KEY>"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

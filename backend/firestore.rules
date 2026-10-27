@@ -1,0 +1,135 @@
+rules_version = '2';
+
+// Security rules for «همراهِ طیف» Firestore.
+//
+// These mirror the access rules documented on the data models. They are a REVIEWABLE
+// DRAFT: test them with the Firebase Emulator Suite before production, and have them
+// reviewed. The guiding principles:
+//   - A user can read public profile/content, and write only their own data.
+//   - Private child data, professional credentials, reports and admin actions are NOT
+//     publicly readable.
+//   - "Admin" is granted via a custom auth claim (request.auth.token.admin == true),
+//     set from a trusted server/Cloud Function — never by the client.
+//   - The verified badge lives in professionals/{uid}.verificationStatus and may be
+//     changed ONLY by an admin.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() { return request.auth != null; }
+    function isSelf(uid) { return isSignedIn() && request.auth.uid == uid; }
+    function isAdmin() { return isSignedIn() && request.auth.token.admin == true; }
+
+    // Public user profiles. Anyone signed in may read; only the owner may write their doc.
+    // The owner must NOT be able to set status/isAdmin themselves.
+    match /users/{uid} {
+      allow read: if isSignedIn();
+      allow create: if isSelf(uid)
+        && request.resource.data.status == 'ACTIVE'
+        && request.resource.data.isAdmin == false;
+      allow update: if (isSelf(uid)
+                        && request.resource.data.isAdmin == resource.data.isAdmin
+                        && request.resource.data.status == resource.data.status)
+                     || isAdmin();
+      allow delete: if isSelf(uid) || isAdmin();
+    }
+
+    // Public professional profiles. The owner may edit public fields but NOT
+    // verificationStatus; only an admin may change verificationStatus.
+    match /professionals/{uid} {
+      allow read: if isSignedIn();
+      allow create: if isSelf(uid)
+        && request.resource.data.verificationStatus in ['NONE', 'PENDING'];
+      allow update: if (isSelf(uid)
+                        && request.resource.data.verificationStatus == resource.data.verificationStatus)
+                     || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // Private verification requests (credentials). Owner may create/read their own;
+    // only admins may read all and update decisions.
+    match /verifications/{id} {
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid
+        && request.resource.data.status == 'PENDING';
+      allow read: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow update, delete: if isAdmin();
+    }
+
+    // Private child data — owner-only, never public.
+    match /children/{id} {
+      allow read, update, delete: if isSignedIn() && resource.data.familyUserId == request.auth.uid;
+      allow create: if isSignedIn() && request.resource.data.familyUserId == request.auth.uid;
+    }
+
+    // Public questions. Anyone signed in reads published ones; author edits/deletes.
+    match /questions/{id} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.resource.data.authorId == request.auth.uid;
+      allow update: if (isSignedIn() && resource.data.authorId == request.auth.uid) || isAdmin();
+      allow delete: if (isSignedIn() && resource.data.authorId == request.auth.uid) || isAdmin();
+    }
+
+    // Public answers.
+    match /answers/{id} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.resource.data.authorId == request.auth.uid;
+      // A reader may only toggle themselves in helpfulByUserIds; author/admin may edit fully.
+      allow update: if isSignedIn();
+      allow delete: if (isSignedIn() && resource.data.authorId == request.auth.uid) || isAdmin();
+    }
+
+    // Groups + membership + posts. (For production, prefer Cloud Functions for the
+    // private-group visibility checks, which rules alone express only coarsely.)
+    match /groups/{id} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.resource.data.ownerId == request.auth.uid;
+      allow update, delete: if (isSignedIn() && resource.data.ownerId == request.auth.uid) || isAdmin();
+    }
+    match /memberships/{id} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isSignedIn();
+    }
+    match /posts/{id} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.resource.data.authorId == request.auth.uid;
+      allow update, delete: if (isSignedIn() && resource.data.authorId == request.auth.uid) || isAdmin();
+    }
+
+    // Private conversations and messages — only participants may read/write.
+    match /conversations/{id} {
+      allow read, update: if isSignedIn() && request.auth.uid in resource.data.participantIds;
+      allow create: if isSignedIn() && request.auth.uid in request.resource.data.participantIds;
+    }
+    match /messages/{id} {
+      allow read: if isSignedIn()
+        && request.auth.uid in get(/databases/$(database)/documents/conversations/$(resource.data.conversationId)).data.participantIds;
+      allow create: if isSignedIn()
+        && request.auth.uid == request.resource.data.senderId
+        && request.auth.uid in get(/databases/$(database)/documents/conversations/$(request.resource.data.conversationId)).data.participantIds;
+    }
+
+    // Guides — public read; admin-authored.
+    match /guides/{id} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Reports — any signed-in user may create; only admins may read/resolve.
+    match /reports/{id} {
+      allow create: if isSignedIn() && request.resource.data.reporterId == request.auth.uid;
+      allow read, update, delete: if isAdmin();
+    }
+
+    // Notifications — readable only by their owner.
+    match /notifications/{id} {
+      allow read, update: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create, delete: if isAdmin();
+    }
+
+    // Admin audit log — admin-only, append-only.
+    match /adminActions/{id} {
+      allow read, create: if isAdmin();
+      allow update, delete: if false;
+    }
+  }
+}

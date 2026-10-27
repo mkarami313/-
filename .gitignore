@@ -1,0 +1,15 @@
+*.iml
+.gradle/
+/local.properties
+/.idea/
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.defaults.properties
+# Never commit real backend credentials
+app/google-services.json
+secrets.properties
+*.jks
+*.keystore

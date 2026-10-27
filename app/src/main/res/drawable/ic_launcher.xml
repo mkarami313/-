@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Simple, calm placeholder launcher icon (a stylized heart/spectrum).
+     Replace with a designed icon before a real release. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#E8F1F2"
+        android:pathData="M0,0h108v108h-108z" />
+    <path
+        android:fillColor="#4C8C7D"
+        android:pathData="M54,82 C40,70 28,60 28,48 C28,40 34,34 42,34 C47,34 51,37 54,41 C57,37 61,34 66,34 C74,34 80,40 80,48 C80,60 68,70 54,82 Z" />
+    <path
+        android:fillColor="#F2B705"
+        android:pathData="M54,26 m-5,0 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0" />
+</vector>
