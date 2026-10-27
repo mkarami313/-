@@ -2,30 +2,32 @@ rules_version = '2';
 
 // Security rules for «همراهِ طیف» Firestore.
 //
-// These mirror the access rules documented on the data models. They are a REVIEWABLE
-// DRAFT: test them with the Firebase Emulator Suite before production, and have them
-// reviewed. The guiding principles:
-//   - A user can read public profile/content, and write only their own data.
-//   - Private child data, professional credentials, reports and admin actions are NOT
-//     publicly readable.
-//   - "Admin" is granted via a custom auth claim (request.auth.token.admin == true),
-//     set from a trusted server/Cloud Function — never by the client.
-//   - The verified badge lives in professionals/{uid}.verificationStatus and may be
-//     changed ONLY by an admin.
+// These match the client's Firebase repositories. They are a REVIEWABLE DRAFT: test with
+// the Firebase Emulator Suite before production. Principles:
+//   - Anyone signed in can read public profiles/content; users write only their own data.
+//   - Private child data, professional credentials, reports and admin actions are not public.
+//   - "Admin" is a custom auth claim (request.auth.token.admin == true), set server-side only.
+//   - The verified badge (professionals.verificationStatus == 'VERIFIED') is admin-only; a user
+//     may only move their own status to 'PENDING' (request review), never to VERIFIED.
+//
+// NOTE: a few actions touch aggregate counters on documents the actor does not own
+// (joining a group bumps memberCount; answering bumps answerCount; marking helpful bumps
+// helpfulCount). Those are allowed narrowly via affectedKeys().hasOnly(...). In production,
+// move counters and cross-user notifications to Cloud Functions and tighten these further.
 service cloud.firestore {
   match /databases/{database}/documents {
 
     function isSignedIn() { return request.auth != null; }
     function isSelf(uid) { return isSignedIn() && request.auth.uid == uid; }
     function isAdmin() { return isSignedIn() && request.auth.token.admin == true; }
+    function changedKeys() { return request.resource.data.diff(resource.data).affectedKeys(); }
 
-    // Public user profiles. Anyone signed in may read; only the owner may write their doc.
-    // The owner must NOT be able to set status/isAdmin themselves.
     match /users/{uid} {
       allow read: if isSignedIn();
       allow create: if isSelf(uid)
         && request.resource.data.status == 'ACTIVE'
         && request.resource.data.isAdmin == false;
+      // Owner may edit their profile but not their own status/isAdmin. Admin may change status.
       allow update: if (isSelf(uid)
                         && request.resource.data.isAdmin == resource.data.isAdmin
                         && request.resource.data.status == resource.data.status)
@@ -33,25 +35,26 @@ service cloud.firestore {
       allow delete: if isSelf(uid) || isAdmin();
     }
 
-    // Public professional profiles. The owner may edit public fields but NOT
-    // verificationStatus; only an admin may change verificationStatus.
     match /professionals/{uid} {
       allow read: if isSignedIn();
       allow create: if isSelf(uid)
         && request.resource.data.verificationStatus in ['NONE', 'PENDING'];
-      allow update: if (isSelf(uid)
-                        && request.resource.data.verificationStatus == resource.data.verificationStatus)
-                     || isAdmin();
-      allow delete: if isAdmin();
+      // Owner may edit public fields; may set status to PENDING (request review) but never to
+      // VERIFIED/REJECTED. Only admins set the final verification status.
+      allow update: if isAdmin()
+        || (isSelf(uid) && (
+              request.resource.data.verificationStatus == resource.data.verificationStatus
+              || request.resource.data.verificationStatus == 'PENDING'));
+      allow delete: if isSelf(uid) || isAdmin();
     }
 
-    // Private verification requests (credentials). Owner may create/read their own;
-    // only admins may read all and update decisions.
+    // Private verification dossier (credentials). Owner creates/reads own; admins decide.
     match /verifications/{id} {
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid
         && request.resource.data.status == 'PENDING';
       allow read: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
-      allow update, delete: if isAdmin();
+      allow update: if isAdmin();
+      allow delete: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
     }
 
     // Private child data — owner-only, never public.
@@ -60,42 +63,50 @@ service cloud.firestore {
       allow create: if isSignedIn() && request.resource.data.familyUserId == request.auth.uid;
     }
 
-    // Public questions. Anyone signed in reads published ones; author edits/deletes.
     match /questions/{id} {
       allow read: if isSignedIn();
       allow create: if isSignedIn() && request.resource.data.authorId == request.auth.uid;
-      allow update: if (isSignedIn() && resource.data.authorId == request.auth.uid) || isAdmin();
+      // Author/admin may edit; anyone signed in may only bump the aggregate counters.
+      allow update: if isAdmin()
+        || (isSignedIn() && resource.data.authorId == request.auth.uid)
+        || (isSignedIn() && changedKeys().hasOnly(['helpfulCount', 'answerCount', 'updatedAt']));
       allow delete: if (isSignedIn() && resource.data.authorId == request.auth.uid) || isAdmin();
     }
 
-    // Public answers.
     match /answers/{id} {
       allow read: if isSignedIn();
       allow create: if isSignedIn() && request.resource.data.authorId == request.auth.uid;
-      // A reader may only toggle themselves in helpfulByUserIds; author/admin may edit fully.
-      allow update: if isSignedIn();
+      // Author/admin may edit; anyone signed in may only toggle themselves in helpfulByUserIds.
+      allow update: if isAdmin()
+        || (isSignedIn() && resource.data.authorId == request.auth.uid)
+        || (isSignedIn() && changedKeys().hasOnly(['helpfulByUserIds']));
       allow delete: if (isSignedIn() && resource.data.authorId == request.auth.uid) || isAdmin();
     }
 
-    // Groups + membership + posts. (For production, prefer Cloud Functions for the
-    // private-group visibility checks, which rules alone express only coarsely.)
     match /groups/{id} {
       allow read: if isSignedIn();
       allow create: if isSignedIn() && request.resource.data.ownerId == request.auth.uid;
-      allow update, delete: if (isSignedIn() && resource.data.ownerId == request.auth.uid) || isAdmin();
+      // Owner/admin may edit; anyone signed in may only adjust the member counter/timestamp
+      // (joining/leaving a group).
+      allow update: if isAdmin()
+        || (isSignedIn() && resource.data.ownerId == request.auth.uid)
+        || (isSignedIn() && changedKeys().hasOnly(['memberCount', 'updatedAt']));
+      allow delete: if (isSignedIn() && resource.data.ownerId == request.auth.uid) || isAdmin();
     }
+
     match /memberships/{id} {
       allow read: if isSignedIn();
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      // Approvals/removals are done by group managers; kept broad for v1 (tighten with Functions).
       allow update, delete: if isSignedIn();
     }
+
     match /posts/{id} {
       allow read: if isSignedIn();
       allow create: if isSignedIn() && request.resource.data.authorId == request.auth.uid;
       allow update, delete: if (isSignedIn() && resource.data.authorId == request.auth.uid) || isAdmin();
     }
 
-    // Private conversations and messages — only participants may read/write.
     match /conversations/{id} {
       allow read, update: if isSignedIn() && request.auth.uid in resource.data.participantIds;
       allow create: if isSignedIn() && request.auth.uid in request.resource.data.participantIds;
@@ -108,10 +119,12 @@ service cloud.firestore {
         && request.auth.uid in get(/databases/$(database)/documents/conversations/$(request.resource.data.conversationId)).data.participantIds;
     }
 
-    // Guides — public read; admin-authored.
     match /guides/{id} {
       allow read: if isSignedIn();
-      allow create, update, delete: if isAdmin();
+      // Anyone signed in may only toggle themselves in savedByUserIds; admins author/edit.
+      allow update: if isAdmin()
+        || (isSignedIn() && changedKeys().hasOnly(['savedByUserIds']));
+      allow create, delete: if isAdmin();
     }
 
     // Reports — any signed-in user may create; only admins may read/resolve.
@@ -120,10 +133,12 @@ service cloud.firestore {
       allow read, update, delete: if isAdmin();
     }
 
-    // Notifications — readable only by their owner.
+    // Notifications — readable/updatable/deletable by their owner. Creatable by any signed-in
+    // user (client writes cross-user notifications in v1). Move to Cloud Functions for
+    // stricter control in production.
     match /notifications/{id} {
-      allow read, update: if isSignedIn() && resource.data.userId == request.auth.uid;
-      allow create, delete: if isAdmin();
+      allow read, update, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn();
     }
 
     // Admin audit log — admin-only, append-only.

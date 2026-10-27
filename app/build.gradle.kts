@@ -2,9 +2,12 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
-    // Enable only after adding a real google-services.json — see docs/BACKEND_SETUP.md
-    // alias(libs.plugins.google.services)
 }
+
+// The real Firebase backend activates automatically when app/google-services.json is present
+// (CI writes it from the GOOGLE_SERVICES_JSON secret). Without the file, the app builds in
+// DEMO mode with no backend, exactly as before.
+val useFirebaseBackend = file("google-services.json").exists()
 
 android {
     namespace = "com.hamraheteyf.app"
@@ -19,9 +22,8 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // Switches the active backend. DEMO = in-memory fake data (no network/keys needed).
-        // Set to "FIREBASE" only after completing docs/BACKEND_SETUP.md.
-        buildConfigField("String", "BACKEND", "\"DEMO\"")
+        // Active backend: FIREBASE when google-services.json is present, else DEMO (in-memory).
+        buildConfigField("String", "BACKEND", if (useFirebaseBackend) "\"FIREBASE\"" else "\"DEMO\"")
     }
 
     buildTypes {
@@ -75,10 +77,18 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
 
-    // ---- Firebase backend (opt-in). Uncomment together with the plugin + google-services.json.
-    // implementation(platform(libs.firebase.bom))
-    // implementation(libs.firebase.auth)
-    // implementation(libs.firebase.firestore)
-    // implementation(libs.firebase.storage)
-    // implementation(libs.firebase.messaging)
+    // Firebase SDK + coroutines bridge. Always on the classpath so the Firebase backend code
+    // compiles; it is only initialized/used at runtime when BACKEND == "FIREBASE".
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.auth)
+    implementation(libs.firebase.firestore)
+    implementation(libs.firebase.storage)
+    implementation(libs.firebase.messaging)
+    implementation(libs.kotlinx.coroutines.play.services)
+}
+
+// Apply the google-services plugin only when the config file exists, so the DEMO build
+// (no google-services.json) keeps working without it.
+if (useFirebaseBackend) {
+    apply(plugin = "com.google.gms.google-services")
 }

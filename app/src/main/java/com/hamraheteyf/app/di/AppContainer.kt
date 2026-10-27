@@ -40,16 +40,10 @@ class DemoAppContainer : AppContainer {
 }
 
 /**
- * Chooses the backend from the build config.
- *
- * The FIREBASE branch is intentionally not wired in this build: enabling it requires adding
- * the Firebase dependencies, the google-services plugin and a real google-services.json
- * (see docs/BACKEND_SETUP.md). A `FirebaseAppContainer` would implement [AppContainer] using
- * Firebase-backed repositories that fulfil the exact same interfaces.
+ * Chooses the backend from the build config. FIREBASE activates automatically when
+ * google-services.json is present at build time (see docs/FIREBASE.md); otherwise DEMO.
  */
 fun createAppContainer(): AppContainer = when (BuildConfig.BACKEND) {
-    "FIREBASE" -> error(
-        "پیکربندی Firebase هنوز در این نسخه فعال نشده است. راهنمای docs/BACKEND_SETUP.md را ببینید."
-    )
+    "FIREBASE" -> FirebaseAppContainer()
     else -> DemoAppContainer()
 }

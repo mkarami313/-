@@ -38,6 +38,19 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x ./gradlew
 
+      # When the GOOGLE_SERVICES_JSON secret is set, write it so the build switches to the
+      # real Firebase backend automatically. Without it, the build stays in DEMO mode.
+      - name: Write google-services.json (enables Firebase backend)
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+            echo "Firebase config written → FIREBASE backend"
+          else
+            echo "No GOOGLE_SERVICES_JSON secret → DEMO backend"
+          fi
+
       - name: Run unit tests
         run: ./gradlew --no-daemon testDebugUnitTest
 
