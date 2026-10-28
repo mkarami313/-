@@ -4,8 +4,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.verticalScroll
+import android.content.Context
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Verified
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.*
@@ -13,6 +15,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
@@ -20,6 +23,17 @@ import androidx.compose.ui.unit.dp
 import com.hamraheteyf.app.data.model.AuthorBadge
 import com.hamraheteyf.app.data.model.ReportReason
 import com.hamraheteyf.app.ui.theme.VerifiedGreen
+
+/**
+ * Remembers which notices/warnings the user has closed, per device. A notice with a
+ * [dismissKey] gets a close (×) button; once closed it stays hidden across sessions.
+ */
+object DismissedNotices {
+    private const val PREFS = "hamrah_notices"
+    private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    fun isDismissed(c: Context, key: String): Boolean = prefs(c).getBoolean(key, false)
+    fun dismiss(c: Context, key: String) = prefs(c).edit().putBoolean(key, true).apply()
+}
 
 /** A colored chip showing the author's role/verification badge. */
 @Composable
@@ -49,37 +63,71 @@ fun AuthorBadgeChip(badge: AuthorBadge, modifier: Modifier = Modifier) {
     }
 }
 
-/** A soft informational banner (e.g. the medical disclaimer). */
+/**
+ * A soft informational banner (e.g. the privacy notice). Dismissible by default: the user
+ * can close it and it stays hidden (keyed by [dismissKey]). Pass dismissKey = null to pin it.
+ */
 @Composable
-fun InfoBanner(text: String, modifier: Modifier = Modifier) {
-    Surface(
-        color = MaterialTheme.colorScheme.primaryContainer,
-        shape = MaterialTheme.shapes.medium,
-        modifier = modifier.fillMaxWidth(),
-    ) {
-        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.Top) {
-            Icon(Icons.Outlined.Info, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimaryContainer, modifier = Modifier.size(20.dp))
-            Spacer(Modifier.width(8.dp))
-            Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
-        }
-    }
+fun InfoBanner(
+    text: String,
+    modifier: Modifier = Modifier,
+    dismissKey: String? = "info_${text.hashCode()}",
+) {
+    DismissibleBanner(
+        modifier = modifier,
+        container = MaterialTheme.colorScheme.primaryContainer,
+        content = MaterialTheme.colorScheme.onPrimaryContainer,
+        icon = Icons.Outlined.Info,
+        text = text,
+        dismissKey = dismissKey,
+    )
 }
 
-/** A prominent safety banner used where the "not a substitute for emergency care" notice matters. */
+/** A prominent safety banner ("not a substitute for emergency care"). Dismissible by default. */
 @Composable
-fun SafetyBanner(modifier: Modifier = Modifier) {
-    Surface(
-        color = MaterialTheme.colorScheme.secondaryContainer,
-        shape = MaterialTheme.shapes.medium,
-        modifier = modifier.fillMaxWidth(),
-    ) {
-        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.Top) {
-            Icon(Icons.Outlined.Warning, contentDescription = null, modifier = Modifier.size(20.dp))
+fun SafetyBanner(
+    modifier: Modifier = Modifier,
+    dismissKey: String? = "safety_notice",
+) {
+    DismissibleBanner(
+        modifier = modifier,
+        container = MaterialTheme.colorScheme.secondaryContainer,
+        content = MaterialTheme.colorScheme.onSecondaryContainer,
+        icon = Icons.Outlined.Warning,
+        text = "این برنامه جایگزین پزشک، درمانگر، تشخیص حرفه‌ای یا خدمات اورژانسی نیست. در شرایط اضطراری با خدمات فوریت تماس بگیرید.",
+        dismissKey = dismissKey,
+    )
+}
+
+/** Shared body for the dismissible notice banners. */
+@Composable
+private fun DismissibleBanner(
+    modifier: Modifier,
+    container: Color,
+    content: Color,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    text: String,
+    dismissKey: String?,
+) {
+    val context = LocalContext.current
+    var visible by remember(dismissKey) {
+        mutableStateOf(dismissKey == null || !DismissedNotices.isDismissed(context, dismissKey))
+    }
+    if (!visible) return
+    Surface(color = container, shape = MaterialTheme.shapes.medium, modifier = modifier.fillMaxWidth()) {
+        Row(Modifier.padding(start = 12.dp, top = 12.dp, bottom = 12.dp, end = 4.dp), verticalAlignment = Alignment.Top) {
+            Icon(icon, contentDescription = null, tint = content, modifier = Modifier.size(20.dp))
             Spacer(Modifier.width(8.dp))
-            Text(
-                "این برنامه جایگزین پزشک، درمانگر، تشخیص حرفه‌ای یا خدمات اورژانسی نیست. در شرایط اضطراری با خدمات فوریت تماس بگیرید.",
-                style = MaterialTheme.typography.bodyMedium,
-            )
+            Text(text, style = MaterialTheme.typography.bodyMedium, color = content, modifier = Modifier.weight(1f))
+            if (dismissKey != null) {
+                Spacer(Modifier.width(4.dp))
+                IconButton(
+                    onClick = { DismissedNotices.dismiss(context, dismissKey); visible = false },
+                    modifier = Modifier.size(28.dp),
+                ) {
+                    Icon(Icons.Outlined.Close, contentDescription = "بستن", tint = content, modifier = Modifier.size(18.dp))
+                }
+            }
         }
     }
 }

@@ -1204,37 +1204,12 @@ CREATE TABLE IF NOT EXISTS creds (
 );
 """
 
-SEED_GUIDES = [
-    {
-        "id": "guide_1", "title": "شروع یک گفتگوی آرام با کودک",
-        "body": "این راهنما چند ایدهٔ عمومی برای ایجاد فضای ارتباطی آرام ارائه می‌دهد. "
-                "محتوای این راهنما توصیهٔ شخصی پزشکی نیست.",
-        "category": "ارتباط", "authorName": "تیم محتوا", "authorId": None,
-        "authorIsVerifiedProfessional": True, "status": "PUBLISHED",
-        "sources": ["منبع نمونه ۱"], "savedByUserIds": [],
-        "lastReviewedAt": now_ms(), "createdAt": now_ms(), "updatedAt": now_ms(),
-    },
-    {
-        "id": "guide_2", "title": "آماده‌شدن برای جلسهٔ مدرسه",
-        "body": "فهرستی از پرسش‌هایی که می‌توانید در جلسهٔ مدرسه بپرسید. "
-                "این مطلب جایگزین مشاورهٔ تخصصی نیست.",
-        "category": "مدرسه", "authorName": "تیم محتوا", "authorId": None,
-        "authorIsVerifiedProfessional": False, "status": "PUBLISHED",
-        "sources": ["منبع نمونه ۲"], "savedByUserIds": [],
-        "lastReviewedAt": now_ms(), "createdAt": now_ms(), "updatedAt": now_ms(),
-    },
-]
-
-
 def cmd_init_db():
+    # Schema only — no sample/mock content. Real content is created by admins in-app.
     cur = conn().cursor()
     cur.execute(SCHEMA)
     cur.close()
-    store = Store()
-    for g in SEED_GUIDES:
-        if not store.get("guides", g["id"]):
-            store.put("guides", g)
-    print("init-db: schema ready, %d seed guide(s) ensured." % len(SEED_GUIDES))
+    print("init-db: schema ready.")
 
 
 def cmd_create_admin(email, password, name):
