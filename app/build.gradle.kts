@@ -14,6 +14,10 @@ val keystoreProps = Properties().apply {
     if (f.exists()) f.inputStream().use { load(it) }
 }
 
+// FCM push is enabled only when google-services.json is present (gitignored). Without it the
+// app still builds and runs; only push is unavailable. App DATA always lives on our server.
+val useFirebasePush = file("google-services.json").exists()
+
 android {
     namespace = "com.hamraheteyf.app"
     compileSdk = 36
@@ -22,8 +26,8 @@ android {
         applicationId = "com.hamraheteyf.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.4.0"
+        versionCode = 5
+        versionName = "0.5.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -101,11 +105,23 @@ dependencies {
     implementation(libs.androidx.material.icons.extended)
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.biometric)
+    implementation(libs.androidx.fragment)  // override biometric's old transitive fragment (ActivityResult needs >=1.3)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.kotlinx.coroutines.play.services)
     implementation(libs.kotlinx.serialization.json)
+
+    // Firebase Cloud Messaging — push transport only (no Firebase data/auth).
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.messaging)
 
     debugImplementation(libs.androidx.ui.tooling)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+}
+
+// Apply the google-services plugin only when the config file exists (see useFirebasePush),
+// so a build without google-services.json still succeeds (push simply disabled).
+if (useFirebasePush) {
+    apply(plugin = "com.google.gms.google-services")
 }

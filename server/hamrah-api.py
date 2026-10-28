@@ -34,6 +34,9 @@ import base64
 import hashlib
 import secrets
 import threading
+import urllib.request
+import urllib.parse
+import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import psycopg2
@@ -63,6 +66,12 @@ DB_DSN = ENV.get("DB_DSN", "dbname=rasta_hamrah user=rasta_office host=127.0.0.1
 JWT_SECRET = ENV.get("JWT_SECRET", "change-me").encode("utf-8")
 PORT = int(ENV.get("PORT", "8150"))
 TOKEN_TTL = int(ENV.get("TOKEN_TTL_SECONDS", str(30 * 24 * 3600)))  # 30 days
+
+# FCM (push). All Google traffic egresses via the box82 German-IP proxy (see FCM_PROXY) so
+# the Firebase project is never hit from an Iranian IP. Both are optional: without the SA
+# file, push is simply skipped and only the app's own poll channel delivers.
+FCM_SA_FILE = ENV.get("FCM_SA_FILE", os.path.join(HERE, "fcm_sa.json"))
+FCM_PROXY = ENV.get("FCM_PROXY", "http://127.0.0.1:12080")
 
 NOT_SIGNED_IN = "ابتدا وارد حساب خود شوید."
 DELETED_USER_ID = "u_deleted"
@@ -249,6 +258,101 @@ NOTIF_TOGGLE = {
 }
 
 
+# ---- FCM push (HTTP v1, via the German-IP proxy) ----
+
+_fcm_lock = threading.Lock()
+_fcm_token = {"value": None, "exp": 0}
+
+
+def _fcm_opener():
+    """urllib opener that routes HTTPS through the box82 proxy (German egress)."""
+    if FCM_PROXY:
+        return urllib.request.build_opener(
+            urllib.request.ProxyHandler({"http": FCM_PROXY, "https": FCM_PROXY}))
+    return urllib.request.build_opener()
+
+
+def _fcm_access_token():
+    """Service-account OAuth2 access token for the FCM scope. Cached ~55 min."""
+    import jwt  # PyJWT
+    with _fcm_lock:
+        if _fcm_token["value"] and _fcm_token["exp"] > time.time() + 60:
+            return _fcm_token["value"]
+        sa = json.load(open(FCM_SA_FILE, encoding="utf-8"))
+        now = int(time.time())
+        assertion = jwt.encode(
+            {"iss": sa["client_email"], "scope": "https://www.googleapis.com/auth/firebase.messaging",
+             "aud": "https://oauth2.googleapis.com/token", "iat": now, "exp": now + 3600},
+            sa["private_key"], algorithm="RS256")
+        data = urllib.parse.urlencode(
+            {"grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer", "assertion": assertion}).encode()
+        req = urllib.request.Request("https://oauth2.googleapis.com/token", data=data, method="POST")
+        resp = json.load(_fcm_opener().open(req, timeout=15))
+        _fcm_token["value"] = resp["access_token"]
+        _fcm_token["exp"] = time.time() + int(resp.get("expires_in", 3600))
+        return _fcm_token["value"]
+
+
+def _fcm_project():
+    return json.load(open(FCM_SA_FILE, encoding="utf-8"))["project_id"]
+
+
+def _fcm_send_one(device_token, title, body, data):
+    """Returns (ok, should_remove_token). Data-only + high priority so the app shows it
+    itself (and dedupes on notifId), which keeps a single push even with two channels."""
+    try:
+        access = _fcm_access_token()
+        payload = json.dumps({"message": {
+            "token": device_token,
+            "android": {"priority": "high"},
+            "data": {k: str(v) for k, v in data.items()} | {"title": title, "body": body},
+        }}).encode()
+        req = urllib.request.Request(
+            "https://fcm.googleapis.com/v1/projects/%s/messages:send" % _fcm_project(),
+            data=payload, method="POST",
+            headers={"Authorization": "Bearer %s" % access, "Content-Type": "application/json"})
+        _fcm_opener().open(req, timeout=15)
+        return True, False
+    except urllib.error.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.read().decode()
+        except Exception:
+            pass
+        # A dead/invalid token should be pruned so we stop trying it.
+        remove = e.code == 404 or ("UNREGISTERED" in detail) or ("not a valid FCM registration" in detail)
+        return False, remove
+    except Exception:
+        return False, False
+
+
+def push_to_user(store, user_id, nid, ntype, title, body, related_id):
+    """Fan out a push to the user's registered devices, off the request thread."""
+    if not os.path.exists(FCM_SA_FILE):
+        return
+    tokens = [t["id"] for t in store.all("pushTokens") if t.get("userId") == user_id]
+    if not tokens:
+        return
+    data = {"notifId": nid, "type": ntype or "", "relatedId": related_id or ""}
+
+    def worker():
+        dead = []
+        for tok in tokens:
+            ok, remove = _fcm_send_one(tok, title, body, data)
+            if remove:
+                dead.append(tok)
+        if dead:
+            try:
+                cur = conn().cursor()
+                for tok in dead:
+                    cur.execute("DELETE FROM docs WHERE collection='pushTokens' AND id=%s", (tok,))
+                cur.close()
+            except Exception:
+                pass
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
 def add_notification(store, user_id, ntype, title, body, related_id=None):
     recipient = store.get("users", user_id)
     if not recipient:
@@ -257,10 +361,14 @@ def add_notification(store, user_id, ntype, title, body, related_id=None):
     key = NOTIF_TOGGLE.get(ntype)
     if key is not None and settings.get(key, True) is False:
         return
+    nid = new_id("n")
     store.put("notifications", {
-        "id": new_id("n"), "userId": user_id, "type": ntype, "title": title,
+        "id": nid, "userId": user_id, "type": ntype, "title": title,
         "body": body, "relatedId": related_id, "read": False, "createdAt": now_ms(),
     })
+    # Fan out a push to the user's registered devices. The device dedupes on `nid`, so a
+    # user who happens to receive via more than one channel still sees it exactly once.
+    push_to_user(store, user_id, nid, ntype, title, body, related_id)
 
 
 def is_active_member(store, group_id, uid):
@@ -882,6 +990,28 @@ def a_markAllRead(store, uid, args):
             store.put("notifications", n)
 
 
+# ---- Push device registration ----
+
+def a_registerPush(store, uid, args):
+    _require(uid)
+    token = _s(args.get("token"))
+    if not token:
+        raise ApiError("توکن دستگاه خالی است.")
+    # doc id = token, so re-registering (incl. moving to another account) just overwrites.
+    store.put("pushTokens", {
+        "id": token, "userId": uid, "platform": args.get("platform") or "android",
+        "updatedAt": now_ms(),
+    })
+
+
+def a_unregisterPush(store, uid, args):
+    _require(uid)
+    token = _s(args.get("token"))
+    existing = store.get("pushTokens", token)
+    if existing and existing.get("userId") == uid:
+        store.delete("pushTokens", token)
+
+
 # ---- Admin (audited) ----
 
 def _log_admin(store, admin_id, action_type, target_type, target_id, reason):
@@ -1141,6 +1271,20 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.rstrip("/") == "/api/health":
             return self._send(200, {"ok": True})
+        if self.path.rstrip("/") == "/api/notifications":
+            # Light endpoint for the background push poller (just the caller's notifications).
+            uid = self._uid()
+            if not uid:
+                return self._send(401, {"ok": False, "error": NOT_SIGNED_IN})
+            try:
+                store = Store()
+                items = sorted(
+                    (n for n in store.all("notifications") if n.get("userId") == uid),
+                    key=lambda n: n.get("createdAt", 0), reverse=True,
+                )[:50]
+                return self._send(200, {"ok": True, "notifications": items})
+            except Exception as e:
+                return self._send(500, {"ok": False, "error": "خطای سرور: %s" % e})
         if self.path.rstrip("/") == "/api/state":
             uid = self._uid()
             if not uid:

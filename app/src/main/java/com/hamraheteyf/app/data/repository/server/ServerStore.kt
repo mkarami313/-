@@ -54,6 +54,7 @@ class ServerStore(val api: HamrahApi) {
             mirror.currentUserId.value = uid
             startPolling()
             scope.launch { refresh() }
+            com.hamraheteyf.app.push.PushRegistration.register(api)  // refresh push registration
         }
     }
 
@@ -65,6 +66,7 @@ class ServerStore(val api: HamrahApi) {
         mirror.currentUserId.value = resp.user.id
         refresh()
         startPolling()
+        com.hamraheteyf.app.push.PushRegistration.register(api)  // register device for push
     }
 
     suspend fun refresh() {
@@ -76,9 +78,13 @@ class ServerStore(val api: HamrahApi) {
 
     fun signOut() {
         poller?.cancel(); poller = null
-        api.clearSession()
         mirror.currentUserId.value = null
         mirror.state.value = Db()
+        // Unregister the device first (needs the still-valid token), then clear the session.
+        scope.launch {
+            com.hamraheteyf.app.push.PushRegistration.unregister(api)
+            api.clearSession()
+        }
     }
 
     private fun startPolling() {
