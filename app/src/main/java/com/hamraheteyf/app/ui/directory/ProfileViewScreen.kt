@@ -79,10 +79,7 @@ fun ProfileViewScreen(userId: String, onBack: () -> Unit, onOpenConversation: (S
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
-            TopAppBar(
-                title = { Text("پروفایل") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "بازگشت") } },
-            )
+            com.hamraheteyf.app.ui.common.ScreenHeader("پروفایل", onBack = onBack)
         },
     ) { padding ->
         val user = state.user

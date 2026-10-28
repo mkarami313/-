@@ -1,10 +1,8 @@
 package com.hamraheteyf.app.ui.qa
 
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.*
@@ -17,7 +15,9 @@ import com.hamraheteyf.app.data.model.QuestionSort
 import com.hamraheteyf.app.di.LocalAppContainer
 import com.hamraheteyf.app.di.appViewModelFactory
 import com.hamraheteyf.app.ui.common.EmptyState
+import com.hamraheteyf.app.ui.common.FilterDropdown
 import com.hamraheteyf.app.ui.common.QuestionCard
+import com.hamraheteyf.app.ui.common.ScreenHeader
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -29,26 +29,33 @@ fun QaListScreen(onOpenQuestion: (String) -> Unit, onAsk: () -> Unit) {
     val category by vm.category.collectAsState()
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("پرسش‌وپاسخ") }) },
+        topBar = { ScreenHeader("پرسش‌وپاسخ") },
         floatingActionButton = {
             ExtendedFloatingActionButton(onClick = onAsk, icon = { Icon(Icons.Filled.Add, null) }, text = { Text("پرسش بپرس") })
         },
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
-            // Sort selector (explicit sorting criterion as required).
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-                QuestionSort.entries.forEach { s ->
-                    FilterChip(selected = sort == s, onClick = { vm.setSort(s) }, label = { Text(s.label) }, modifier = Modifier.padding(end = 8.dp))
-                }
+            // Sort + category as compact dropdowns (no overflowing chip rows).
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                FilterDropdown(
+                    label = "مرتب‌سازی",
+                    selected = sort.label,
+                    options = QuestionSort.entries.map { it.label },
+                    onSelected = { vm.setSort(QuestionSort.entries[it]) },
+                    modifier = Modifier.weight(1f),
+                )
+                val catOptions = listOf("همه") + QuestionCategory.entries.map { it.label }
+                FilterDropdown(
+                    label = "دسته‌بندی",
+                    selected = category?.label ?: "همه",
+                    options = catOptions,
+                    onSelected = { vm.setCategory(if (it == 0) null else QuestionCategory.entries[it - 1]) },
+                    modifier = Modifier.weight(1f),
+                )
             }
-            // Category filter row.
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
-                FilterChip(selected = category == null, onClick = { vm.setCategory(null) }, label = { Text("همه") }, modifier = Modifier.padding(end = 8.dp))
-                QuestionCategory.entries.forEach { c ->
-                    FilterChip(selected = category == c, onClick = { vm.setCategory(c) }, label = { Text(c.label) }, modifier = Modifier.padding(end = 8.dp))
-                }
-            }
-            Spacer(Modifier.height(8.dp))
             if (items.isEmpty()) {
                 EmptyState("پرسشی با این فیلترها یافت نشد. می‌توانید اولین پرسش را ثبت کنید.")
             } else {

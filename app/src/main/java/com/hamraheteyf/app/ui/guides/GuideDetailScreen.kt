@@ -47,12 +47,11 @@ fun GuideDetailScreen(guideId: String, onBack: () -> Unit) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("راهنما") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "بازگشت") } },
+            com.hamraheteyf.app.ui.common.ScreenHeader(
+                "راهنما", onBack = onBack,
                 actions = {
                     IconButton(onClick = { vm.toggleSaved() }) {
-                        Icon(if (saved) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder, contentDescription = "ذخیره")
+                        Icon(if (saved) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder, contentDescription = "ذخیره", tint = androidx.compose.ui.graphics.Color.White)
                     }
                 },
             )

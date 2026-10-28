@@ -38,7 +38,7 @@ fun ProfileTabScreen(
     val user by vm.currentUser.collectAsState()
     val professional by vm.professional.collectAsState()
 
-    Scaffold(topBar = { TopAppBar(title = { Text("پروفایل") }) }) { padding ->
+    Scaffold(topBar = { com.hamraheteyf.app.ui.common.ScreenHeader("پروفایل") }) { padding ->
         Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState())) {
             if (user == null) {
                 // Signed in but the profile document hasn't loaded/been created yet. Always

@@ -35,10 +35,7 @@ fun ProfessionalEditScreen(onBack: () -> Unit) {
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
-            TopAppBar(
-                title = { Text("پروفایل تخصصی") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "بازگشت") } },
-            )
+            com.hamraheteyf.app.ui.common.ScreenHeader("پروفایل تخصصی", onBack = onBack)
         },
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {

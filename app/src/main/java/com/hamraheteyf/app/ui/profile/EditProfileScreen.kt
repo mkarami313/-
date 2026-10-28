@@ -31,10 +31,7 @@ fun EditProfileScreen(onBack: () -> Unit) {
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
-            TopAppBar(
-                title = { Text("ویرایش پروفایل") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "بازگشت") } },
-            )
+            com.hamraheteyf.app.ui.common.ScreenHeader("ویرایش پروفایل", onBack = onBack)
         },
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {

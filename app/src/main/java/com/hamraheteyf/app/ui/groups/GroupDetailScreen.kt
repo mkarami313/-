@@ -37,10 +37,7 @@ fun GroupDetailScreen(groupId: String, onBack: () -> Unit) {
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
-            TopAppBar(
-                title = { Text(state.group?.title ?: "گروه") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "بازگشت") } },
-            )
+            com.hamraheteyf.app.ui.common.ScreenHeader(state.group?.title ?: "گروه", onBack = onBack)
         },
     ) { padding ->
         val group = state.group

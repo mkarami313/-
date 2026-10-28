@@ -44,10 +44,7 @@ fun AdminScreen(onBack: () -> Unit) {
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
-            TopAppBar(
-                title = { Text("پنل مدیریت") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "بازگشت") } },
-            )
+            com.hamraheteyf.app.ui.common.ScreenHeader("پنل مدیریت", onBack = onBack)
         },
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {

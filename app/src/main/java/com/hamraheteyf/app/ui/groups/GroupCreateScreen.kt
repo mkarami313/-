@@ -55,10 +55,7 @@ fun GroupCreateScreen(onBack: () -> Unit, onCreated: (String) -> Unit) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("ساخت گروه") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "بازگشت") } },
-            )
+            com.hamraheteyf.app.ui.common.ScreenHeader("ساخت گروه", onBack = onBack)
         },
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {

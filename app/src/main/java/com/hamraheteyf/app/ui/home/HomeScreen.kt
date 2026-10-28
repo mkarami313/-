@@ -9,6 +9,7 @@ import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.hamraheteyf.app.di.LocalAppContainer
@@ -39,12 +40,12 @@ fun HomeScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("سلام${user?.let { "، ${it.displayName}" } ?: ""}") },
+            ScreenHeader(
+                title = "سلام${user?.let { "، ${it.displayName}" } ?: ""}",
                 actions = {
                     BadgedBox(badge = { if (unread > 0) Badge { Text(unread.toPersianDigits()) } }) {
                         IconButton(onClick = onOpenNotifications) {
-                            Icon(Icons.Outlined.Notifications, contentDescription = "اعلان‌ها")
+                            Icon(Icons.Outlined.Notifications, contentDescription = "اعلان‌ها", tint = Color.White)
                         }
                     }
                 },

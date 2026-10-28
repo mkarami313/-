@@ -19,6 +19,7 @@ import com.hamraheteyf.app.di.LocalAppContainer
 import com.hamraheteyf.app.di.appViewModelFactory
 import com.hamraheteyf.app.ui.common.EmptyState
 import com.hamraheteyf.app.ui.common.GroupCard
+import com.hamraheteyf.app.ui.common.ScreenHeader
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
 
@@ -43,7 +44,7 @@ fun GroupsListScreen(onOpenGroup: (String) -> Unit, onCreate: () -> Unit) {
     var tab by rememberSaveable { mutableStateOf(0) }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("گروه‌ها") }) },
+        topBar = { ScreenHeader("گروه‌ها") },
         floatingActionButton = {
             ExtendedFloatingActionButton(onClick = onCreate, icon = { Icon(Icons.Filled.Add, null) }, text = { Text("گروه تازه") })
         },

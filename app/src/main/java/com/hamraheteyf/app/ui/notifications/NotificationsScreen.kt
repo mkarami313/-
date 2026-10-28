@@ -39,10 +39,9 @@ fun NotificationsScreen(onBack: () -> Unit) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("اعلان‌ها") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "بازگشت") } },
-                actions = { TextButton(onClick = { vm.markAllRead() }) { Text("خواندن همه") } },
+            com.hamraheteyf.app.ui.common.ScreenHeader(
+                "اعلان‌ها", onBack = onBack,
+                actions = { TextButton(onClick = { vm.markAllRead() }) { Text("خواندن همه", color = androidx.compose.ui.graphics.Color.White) } },
             )
         },
     ) { padding ->

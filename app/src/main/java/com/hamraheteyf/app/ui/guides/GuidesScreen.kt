@@ -39,10 +39,7 @@ fun GuidesScreen(onBack: () -> Unit, onOpen: (String) -> Unit) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("راهنماها و منابع") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "بازگشت") } },
-            )
+            com.hamraheteyf.app.ui.common.ScreenHeader("راهنماها و منابع", onBack = onBack)
         },
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {

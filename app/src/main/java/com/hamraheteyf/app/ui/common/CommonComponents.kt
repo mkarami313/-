@@ -1,5 +1,6 @@
 package com.hamraheteyf.app.ui.common
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
@@ -8,6 +9,8 @@ import android.content.Context
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Inbox
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.*
@@ -141,8 +144,29 @@ fun LoadingState(modifier: Modifier = Modifier) {
 
 @Composable
 fun EmptyState(message: String, modifier: Modifier = Modifier) {
-    Box(modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-        Text(message, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+    Column(
+        modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 40.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(
+            Modifier.size(72.dp)
+                .background(MaterialTheme.colorScheme.surfaceVariant, androidx.compose.foundation.shape.CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Outlined.Inbox,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+                modifier = Modifier.size(34.dp),
+            )
+        }
+        Spacer(Modifier.height(14.dp))
+        Text(
+            message,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
     }
 }
 
@@ -153,6 +177,48 @@ fun ErrorState(message: String, onRetry: (() -> Unit)? = null, modifier: Modifie
         if (onRetry != null) {
             Spacer(Modifier.height(12.dp))
             Button(onClick = onRetry) { Text("تلاش دوباره") }
+        }
+    }
+}
+
+/**
+ * A compact dropdown filter (anchored read-only field + menu). Used in place of overflowing
+ * horizontal chip rows.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun FilterDropdown(
+    label: String,
+    selected: String,
+    options: List<String>,
+    onSelected: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }, modifier = modifier) {
+        OutlinedTextField(
+            value = selected,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text(label, style = MaterialTheme.typography.labelMedium) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodyMedium,
+            shape = MaterialTheme.shapes.small,
+            modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth(),
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEachIndexed { index, option ->
+                DropdownMenuItem(
+                    text = { Text(option) },
+                    onClick = { onSelected(index); expanded = false },
+                    trailingIcon = {
+                        if (option == selected) {
+                            Icon(Icons.Outlined.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        }
+                    },
+                )
+            }
         }
     }
 }

@@ -37,10 +37,7 @@ fun RegisterScreen(onBack: () -> Unit) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("ثبت‌نام") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "بازگشت") } },
-            )
+            com.hamraheteyf.app.ui.common.ScreenHeader("ثبت‌نام", onBack = onBack)
         },
     ) { padding ->
         Column(

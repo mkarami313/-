@@ -46,10 +46,7 @@ fun DirectoryScreen(onBack: () -> Unit, onOpenProfile: (String) -> Unit) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("متخصصان") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "بازگشت") } },
-            )
+            com.hamraheteyf.app.ui.common.ScreenHeader("متخصصان", onBack = onBack)
         },
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {

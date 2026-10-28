@@ -42,11 +42,10 @@ fun QaDetailScreen(questionId: String, onBack: () -> Unit) {
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
-            TopAppBar(
-                title = { Text("پرسش") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "بازگشت") } },
+            com.hamraheteyf.app.ui.common.ScreenHeader(
+                "پرسش", onBack = onBack,
                 actions = {
-                    IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, "گزینه‌ها") }
+                    IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, "گزینه‌ها", tint = androidx.compose.ui.graphics.Color.White) }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                         DropdownMenuItem(text = { Text("گزارش پرسش") }, onClick = { menu = false; reportTarget = ContentType.QUESTION to questionId })
                         if (state.isAuthor) {

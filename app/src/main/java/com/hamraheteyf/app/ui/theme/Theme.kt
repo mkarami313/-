@@ -1,7 +1,9 @@
 package com.hamraheteyf.app.ui.theme
 
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.Surface
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
@@ -10,31 +12,40 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.dp
 
 private val LightColors = lightColorScheme(
     primary = Teal,
-    onPrimary = Surface,
+    onPrimary = Color_White,
     primaryContainer = TealContainer,
-    onPrimaryContainer = TealDark,
-    secondary = Sand,
-    secondaryContainer = SandContainer,
+    onPrimaryContainer = OnTealContainer,
+    secondary = Apricot,
+    onSecondary = Color_White,
+    secondaryContainer = ApricotContainer,
+    onSecondaryContainer = OnApricotContainer,
+    tertiary = TealDark,
+    tertiaryContainer = TealContainer,
+    onTertiaryContainer = OnTealContainer,
     background = Background,
     onBackground = OnSurface,
     surface = Surface,
     onSurface = OnSurface,
-    surfaceVariant = TealContainer,
+    surfaceVariant = SurfaceSoft,
     onSurfaceVariant = OnSurfaceMuted,
+    surfaceContainerHighest = SurfaceSoft,
     outline = Outline,
+    outlineVariant = OutlineSoft,
     error = Danger,
     errorContainer = DangerContainer,
+    onError = Color_White,
 )
 
 private val DarkColors = darkColorScheme(
     primary = TealContainer,
-    onPrimary = TealDark,
+    onPrimary = TealDeep,
     primaryContainer = TealDark,
     onPrimaryContainer = TealContainer,
-    secondary = Sand,
+    secondary = Apricot,
     background = DarkBackground,
     onBackground = DarkOnSurface,
     surface = DarkSurface,
@@ -43,14 +54,19 @@ private val DarkColors = darkColorScheme(
     error = Danger,
 )
 
+private val AppShapes = Shapes(
+    extraSmall = RoundedCornerShape(8.dp),
+    small = RoundedCornerShape(12.dp),
+    medium = RoundedCornerShape(18.dp),
+    large = RoundedCornerShape(24.dp),
+    extraLarge = RoundedCornerShape(28.dp),
+)
+
 /**
  * Applies the app theme and forces right-to-left layout for the Persian UI.
  *
- * The app uses a fixed LIGHT theme by default (does NOT follow the system dark mode). This
- * is intentional: the calm, high-contrast light palette is the designed experience, and it
- * avoids low-contrast text when the device is in dark mode. A caller can still opt into the
- * dark palette by passing darkTheme = true. Content is wrapped in a themed [Surface] so the
- * background always matches the color scheme and text stays readable.
+ * Ships a fixed LIGHT theme (does not follow system dark mode) — the calm, warm light
+ * palette is the designed experience. A caller may still pass darkTheme = true.
  */
 @Composable
 fun HamrahTheme(
@@ -60,6 +76,7 @@ fun HamrahTheme(
     MaterialTheme(
         colorScheme = if (darkTheme) DarkColors else LightColors,
         typography = AppTypography,
+        shapes = AppShapes,
     ) {
         CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
             Surface(

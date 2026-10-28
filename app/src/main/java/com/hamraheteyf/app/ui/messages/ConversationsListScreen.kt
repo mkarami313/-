@@ -49,7 +49,7 @@ fun ConversationsListScreen(onOpen: (String) -> Unit) {
     })
     val rows by vm.rows.collectAsState()
 
-    Scaffold(topBar = { TopAppBar(title = { Text("پیام‌ها") }) }) { padding ->
+    Scaffold(topBar = { com.hamraheteyf.app.ui.common.ScreenHeader("پیام‌ها") }) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
             InfoBanner("پیام‌رسانی برای وضعیت اورژانسی یا تشخیص پزشکی نیست.", Modifier.padding(16.dp))
             if (rows.isEmpty()) {
