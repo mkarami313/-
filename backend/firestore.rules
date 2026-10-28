@@ -2,32 +2,33 @@ rules_version = '2';
 
 // Security rules for «همراهِ طیف» Firestore.
 //
-// These match the client's Firebase repositories. They are a REVIEWABLE DRAFT: test with
-// the Firebase Emulator Suite before production. Principles:
-//   - Anyone signed in can read public profiles/content; users write only their own data.
-//   - Private child data, professional credentials, reports and admin actions are not public.
-//   - "Admin" is a custom auth claim (request.auth.token.admin == true), set server-side only.
-//   - The verified badge (professionals.verificationStatus == 'VERIFIED') is admin-only; a user
-//     may only move their own status to 'PENDING' (request review), never to VERIFIED.
+// Admin model: a user is admin when EITHER they have the custom auth claim admin==true,
+// OR their users/{uid} document has isAdmin == true. The field path lets the project owner
+// grant admin from the Firestore console (which bypasses these rules) without the Admin SDK.
+// Regular users can never set their own isAdmin (create forces false; self-update forbids
+// changing it), so only the console or an existing admin can promote someone.
 //
-// NOTE: a few actions touch aggregate counters on documents the actor does not own
-// (joining a group bumps memberCount; answering bumps answerCount; marking helpful bumps
-// helpfulCount). Those are allowed narrowly via affectedKeys().hasOnly(...). In production,
-// move counters and cross-user notifications to Cloud Functions and tighten these further.
+// isAdmin() is placed LAST in every "||" so the extra document read only happens when the
+// cheaper checks fail. REVIEWABLE DRAFT — test with the Emulator Suite before production.
 service cloud.firestore {
   match /databases/{database}/documents {
 
     function isSignedIn() { return request.auth != null; }
     function isSelf(uid) { return isSignedIn() && request.auth.uid == uid; }
-    function isAdmin() { return isSignedIn() && request.auth.token.admin == true; }
     function changedKeys() { return request.resource.data.diff(resource.data).affectedKeys(); }
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.admin == true
+        || (exists(/databases/$(database)/documents/users/$(request.auth.uid))
+            && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true)
+      );
+    }
 
     match /users/{uid} {
       allow read: if isSignedIn();
       allow create: if isSelf(uid)
         && request.resource.data.status == 'ACTIVE'
         && request.resource.data.isAdmin == false;
-      // Owner may edit their profile but not their own status/isAdmin. Admin may change status.
       allow update: if (isSelf(uid)
                         && request.resource.data.isAdmin == resource.data.isAdmin
                         && request.resource.data.status == resource.data.status)
@@ -39,25 +40,21 @@ service cloud.firestore {
       allow read: if isSignedIn();
       allow create: if isSelf(uid)
         && request.resource.data.verificationStatus in ['NONE', 'PENDING'];
-      // Owner may edit public fields; may set status to PENDING (request review) but never to
-      // VERIFIED/REJECTED. Only admins set the final verification status.
-      allow update: if isAdmin()
-        || (isSelf(uid) && (
+      allow update: if (isSelf(uid) && (
               request.resource.data.verificationStatus == resource.data.verificationStatus
-              || request.resource.data.verificationStatus == 'PENDING'));
+              || request.resource.data.verificationStatus == 'PENDING'))
+            || isAdmin();
       allow delete: if isSelf(uid) || isAdmin();
     }
 
-    // Private verification dossier (credentials). Owner creates/reads own; admins decide.
     match /verifications/{id} {
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid
         && request.resource.data.status == 'PENDING';
-      allow read: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow read: if (isSignedIn() && resource.data.userId == request.auth.uid) || isAdmin();
       allow update: if isAdmin();
-      allow delete: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow delete: if (isSignedIn() && resource.data.userId == request.auth.uid) || isAdmin();
     }
 
-    // Private child data — owner-only, never public.
     match /children/{id} {
       allow read, update, delete: if isSignedIn() && resource.data.familyUserId == request.auth.uid;
       allow create: if isSignedIn() && request.resource.data.familyUserId == request.auth.uid;
@@ -66,38 +63,33 @@ service cloud.firestore {
     match /questions/{id} {
       allow read: if isSignedIn();
       allow create: if isSignedIn() && request.resource.data.authorId == request.auth.uid;
-      // Author/admin may edit; anyone signed in may only bump the aggregate counters.
-      allow update: if isAdmin()
-        || (isSignedIn() && resource.data.authorId == request.auth.uid)
-        || (isSignedIn() && changedKeys().hasOnly(['helpfulCount', 'answerCount', 'updatedAt']));
+      allow update: if (isSignedIn() && resource.data.authorId == request.auth.uid)
+        || (isSignedIn() && changedKeys().hasOnly(['helpfulCount', 'answerCount', 'updatedAt']))
+        || isAdmin();
       allow delete: if (isSignedIn() && resource.data.authorId == request.auth.uid) || isAdmin();
     }
 
     match /answers/{id} {
       allow read: if isSignedIn();
       allow create: if isSignedIn() && request.resource.data.authorId == request.auth.uid;
-      // Author/admin may edit; anyone signed in may only toggle themselves in helpfulByUserIds.
-      allow update: if isAdmin()
-        || (isSignedIn() && resource.data.authorId == request.auth.uid)
-        || (isSignedIn() && changedKeys().hasOnly(['helpfulByUserIds']));
+      allow update: if (isSignedIn() && resource.data.authorId == request.auth.uid)
+        || (isSignedIn() && changedKeys().hasOnly(['helpfulByUserIds']))
+        || isAdmin();
       allow delete: if (isSignedIn() && resource.data.authorId == request.auth.uid) || isAdmin();
     }
 
     match /groups/{id} {
       allow read: if isSignedIn();
       allow create: if isSignedIn() && request.resource.data.ownerId == request.auth.uid;
-      // Owner/admin may edit; anyone signed in may only adjust the member counter/timestamp
-      // (joining/leaving a group).
-      allow update: if isAdmin()
-        || (isSignedIn() && resource.data.ownerId == request.auth.uid)
-        || (isSignedIn() && changedKeys().hasOnly(['memberCount', 'updatedAt']));
+      allow update: if (isSignedIn() && resource.data.ownerId == request.auth.uid)
+        || (isSignedIn() && changedKeys().hasOnly(['memberCount', 'updatedAt']))
+        || isAdmin();
       allow delete: if (isSignedIn() && resource.data.ownerId == request.auth.uid) || isAdmin();
     }
 
     match /memberships/{id} {
       allow read: if isSignedIn();
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      // Approvals/removals are done by group managers; kept broad for v1 (tighten with Functions).
       allow update, delete: if isSignedIn();
     }
 
@@ -121,27 +113,20 @@ service cloud.firestore {
 
     match /guides/{id} {
       allow read: if isSignedIn();
-      // Anyone signed in may only toggle themselves in savedByUserIds; admins author/edit.
-      allow update: if isAdmin()
-        || (isSignedIn() && changedKeys().hasOnly(['savedByUserIds']));
+      allow update: if (isSignedIn() && changedKeys().hasOnly(['savedByUserIds'])) || isAdmin();
       allow create, delete: if isAdmin();
     }
 
-    // Reports — any signed-in user may create; only admins may read/resolve.
     match /reports/{id} {
       allow create: if isSignedIn() && request.resource.data.reporterId == request.auth.uid;
       allow read, update, delete: if isAdmin();
     }
 
-    // Notifications — readable/updatable/deletable by their owner. Creatable by any signed-in
-    // user (client writes cross-user notifications in v1). Move to Cloud Functions for
-    // stricter control in production.
     match /notifications/{id} {
       allow read, update, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
       allow create: if isSignedIn();
     }
 
-    // Admin audit log — admin-only, append-only.
     match /adminActions/{id} {
       allow read, create: if isAdmin();
       allow update, delete: if false;
