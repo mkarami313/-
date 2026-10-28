@@ -1,5 +1,6 @@
 package com.hamraheteyf.app.data.repository.fake
 
+import kotlinx.serialization.Serializable
 import com.hamraheteyf.app.data.model.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import java.util.concurrent.atomic.AtomicLong
@@ -8,6 +9,7 @@ import java.util.concurrent.atomic.AtomicLong
  * An immutable snapshot of the whole demo database. Every mutation produces a new [Db],
  * so all derived flows recompute automatically — a tiny reactive store with no backend.
  */
+@Serializable
 data class Db(
     val users: List<User> = emptyList(),
     val professionals: List<ProfessionalProfile> = emptyList(),

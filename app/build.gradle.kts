@@ -1,29 +1,48 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
 }
 
-// The real Firebase backend activates automatically when app/google-services.json is present
-// (CI writes it from the GOOGLE_SERVICES_JSON secret). Without the file, the app builds in
-// DEMO mode with no backend, exactly as before.
-val useFirebaseBackend = file("google-services.json").exists()
+// Release signing is read from a gitignored keystore.properties at the repo root (never
+// committed). Without it, the release build is left unsigned (e.g. on CI without the key).
+val keystoreProps = Properties().apply {
+    val f = rootProject.file("keystore.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
 
 android {
     namespace = "com.hamraheteyf.app"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.hamraheteyf.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // Active backend: FIREBASE when google-services.json is present, else DEMO (in-memory).
-        buildConfigField("String", "BACKEND", if (useFirebaseBackend) "\"FIREBASE\"" else "\"DEMO\"")
+        // Active backend:
+        //   SERVER — the self-hosted API on tizbin (real users, persistent data).
+        //   DEMO   — in-memory fake store, no network (used by unit tests / offline preview).
+        buildConfigField("String", "BACKEND", "\"SERVER\"")
+        buildConfigField("String", "API_BASE_URL", "\"https://proj.tizbin.org/hamrah/api/\"")
+    }
+
+    signingConfigs {
+        if (keystoreProps.getProperty("storeFile") != null) {
+            create("release") {
+                storeFile = file(keystoreProps.getProperty("storeFile"))
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
@@ -31,8 +50,8 @@ android {
             isMinifyEnabled = false
         }
         release {
-            // Demo build is unsigned; see docs/BUILD_APK.md for signing a real release.
             isMinifyEnabled = false
+            signingConfig = signingConfigs.findByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -71,24 +90,10 @@ dependencies {
     implementation(libs.androidx.material.icons.extended)
     implementation(libs.androidx.navigation.compose)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.kotlinx.serialization.json)
 
     debugImplementation(libs.androidx.ui.tooling)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
-
-    // Firebase SDK + coroutines bridge. Always on the classpath so the Firebase backend code
-    // compiles; it is only initialized/used at runtime when BACKEND == "FIREBASE".
-    implementation(platform(libs.firebase.bom))
-    implementation(libs.firebase.auth)
-    implementation(libs.firebase.firestore)
-    implementation(libs.firebase.storage)
-    implementation(libs.firebase.messaging)
-    implementation(libs.kotlinx.coroutines.play.services)
-}
-
-// Apply the google-services plugin only when the config file exists, so the DEMO build
-// (no google-services.json) keeps working without it.
-if (useFirebaseBackend) {
-    apply(plugin = "com.google.gms.google-services")
 }

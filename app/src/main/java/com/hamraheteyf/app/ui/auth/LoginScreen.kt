@@ -75,16 +75,18 @@ fun LoginScreen(onGoToRegister: () -> Unit) {
         TextButton(onClick = { vm.resetPassword(email) }) { Text("رمز عبور را فراموش کرده‌ام") }
         TextButton(onClick = onGoToRegister) { Text("حساب ندارید؟ ثبت‌نام کنید") }
 
-        Spacer(Modifier.height(24.dp))
-        // Demo-only helper so reviewers can sign in without a backend.
-        Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.medium) {
-            Column(Modifier.padding(12.dp)) {
-                Text("حالت نمایشی", style = MaterialTheme.typography.labelLarge)
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "برای آزمایش می‌توانید با ایمیل ${SeedData.EMAIL_FAMILY1} (خانواده) یا ${SeedData.EMAIL_ADMIN} (مدیر) و رمز ${FakeStore.DEMO_PASSWORD} وارد شوید.",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
+        // Demo-only helper so reviewers can sign in without a backend (hidden in SERVER builds).
+        if (com.hamraheteyf.app.BuildConfig.BACKEND == "DEMO") {
+            Spacer(Modifier.height(24.dp))
+            Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.medium) {
+                Column(Modifier.padding(12.dp)) {
+                    Text("حالت نمایشی", style = MaterialTheme.typography.labelLarge)
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "برای آزمایش می‌توانید با ایمیل ${SeedData.EMAIL_FAMILY1} (خانواده) یا ${SeedData.EMAIL_ADMIN} (مدیر) و رمز ${FakeStore.DEMO_PASSWORD} وارد شوید.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
             }
         }
     }

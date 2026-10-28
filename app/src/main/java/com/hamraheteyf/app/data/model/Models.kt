@@ -1,5 +1,7 @@
 package com.hamraheteyf.app.data.model
 
+import kotlinx.serialization.Serializable
+
 /**
  * Domain models for «همراهِ طیف».
  *
@@ -12,6 +14,7 @@ package com.hamraheteyf.app.data.model
  */
 
 /** Coarse age bucket — we deliberately avoid exact birth dates for children. */
+@Serializable
 enum class AgeRange(val label: String) {
     UNDER_3("زیر ۳ سال"),
     AGE_3_6("۳ تا ۶ سال"),
@@ -22,6 +25,7 @@ enum class AgeRange(val label: String) {
 }
 
 /** Per-user privacy choices. Defaults are conservative (hide by default). */
+@Serializable
 data class PrivacySettings(
     val showCity: Boolean = false,
     val showBio: Boolean = true,
@@ -29,6 +33,7 @@ data class PrivacySettings(
 )
 
 /** Per-user notification category toggles. */
+@Serializable
 data class NotificationSettings(
     val questionAnswered: Boolean = true,
     val newMessage: Boolean = true,
@@ -44,6 +49,7 @@ data class NotificationSettings(
  * [privacy]). [email], [notificationSettings] and [blockedUserIds] are private to the
  * owner (and admins for abuse handling, logged as an [AdminAction]).
  */
+@Serializable
 data class User(
     val id: String,
     val displayName: String,
@@ -67,6 +73,7 @@ data class User(
  * they live in [VerificationRequest], which is admin-only.
  * [verificationStatus] can only be changed by an admin.
  */
+@Serializable
 data class ProfessionalProfile(
     val id: String,
     val userId: String,
@@ -85,6 +92,7 @@ data class ProfessionalProfile(
  * Access rule: admin-only (never exposed in public profile or search).
  * [documentRefs] are storage paths; deleting the request must delete the documents.
  */
+@Serializable
 data class VerificationRequest(
     val id: String,
     val userId: String,
@@ -105,6 +113,7 @@ data class VerificationRequest(
  * family; even then only [nickname]/[ageRange]/[interests] may be shown). Never embedded
  * in public questions/answers/posts.
  */
+@Serializable
 data class ChildProfilePrivate(
     val id: String,
     val familyUserId: String,
@@ -117,6 +126,7 @@ data class ChildProfilePrivate(
 )
 
 /** Publication state shared by user-generated content. */
+@Serializable
 enum class ContentStatus(val label: String) {
     PUBLISHED("منتشرشده"),
     HIDDEN("پنهان‌شده"),
@@ -129,6 +139,7 @@ enum class ContentStatus(val label: String) {
  * deletable by [authorId]; hideable/removable by admins. When [isAnonymous], the author
  * identity is hidden from the public UI but retained for abuse handling.
  */
+@Serializable
 data class Question(
     val id: String,
     val authorId: String,
@@ -148,6 +159,7 @@ data class Question(
  * An answer to a [Question].
  * Access rule: as for [Question]. [helpfulByUserIds] records who marked it helpful.
  */
+@Serializable
 data class Answer(
     val id: String,
     val questionId: String,
@@ -166,6 +178,7 @@ data class Answer(
  * Access rule: PUBLIC groups are discoverable by all signed-in users. PRIVATE groups and
  * their posts are visible only to ACTIVE members. Managed by OWNER/MODERATOR memberships.
  */
+@Serializable
 data class Group(
     val id: String,
     val ownerId: String,
@@ -180,6 +193,7 @@ data class Group(
     val updatedAt: Long = 0L,
 )
 
+@Serializable
 data class GroupMembership(
     val id: String,
     val groupId: String,
@@ -191,6 +205,7 @@ data class GroupMembership(
 )
 
 /** A post inside a group. Access rule follows the group's visibility/membership. */
+@Serializable
 data class GroupPost(
     val id: String,
     val groupId: String,
@@ -206,6 +221,7 @@ data class GroupPost(
  * Access rule: only the two [participantIds] can read it. Messaging only starts after the
  * recipient ACCEPTs the request. No attachments in v1.
  */
+@Serializable
 data class Conversation(
     val id: String,
     val participantIds: List<String>,
@@ -219,6 +235,7 @@ data class Conversation(
 )
 
 /** A text message. Access rule follows the parent [Conversation]. */
+@Serializable
 data class Message(
     val id: String,
     val conversationId: String,
@@ -231,6 +248,7 @@ data class Message(
  * An educational guide/resource.
  * Access rule: readable by all when [status] == PUBLISHED. Authored/edited by admins in v1.
  */
+@Serializable
 data class GuideArticle(
     val id: String,
     val title: String,
@@ -251,6 +269,7 @@ data class GuideArticle(
  * A user-filed report.
  * Access rule: creatable by any signed-in user; readable/resolvable by admins only.
  */
+@Serializable
 data class Report(
     val id: String,
     val reporterId: String,
@@ -270,6 +289,7 @@ data class Report(
  * Access rule: readable only by [userId]. [body] is intentionally generic (e.g. "پیام جدید
  * دارید") so sensitive content never appears in a device push payload.
  */
+@Serializable
 data class Notification(
     val id: String,
     val userId: String,
@@ -286,6 +306,7 @@ data class Notification(
  * Access rule: admin-only. Every sensitive admin operation (including viewing a credential)
  * must append an [AdminAction] with a [reason].
  */
+@Serializable
 data class AdminAction(
     val id: String,
     val adminId: String,

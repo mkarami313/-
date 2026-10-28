@@ -40,5 +40,4 @@ keyPassword=...
 
 ## نکته
 - برای انتشار در Google Play از **App Bundle** استفاده کنید: `./gradlew bundleRelease`.
-- پیش از ریلیز واقعی، `BACKEND` را روی `FIREBASE` بگذارید و `google-services.json` واقعی را اضافه کنید
-  (راهنما: `docs/BACKEND_SETUP.md`).
+- نسخهٔ ریلیز به‌صورت پیش‌فرض `BACKEND=SERVER` است و به سرورِ خودمیزبان وصل می‌شود (راهنما: `server/README.md`).

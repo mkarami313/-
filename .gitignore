@@ -3,7 +3,7 @@
 /local.properties
 /.idea/
 .DS_Store
-/build
+build/
 /captures
 .externalNativeBuild
 .cxx
@@ -13,3 +13,6 @@ app/google-services.json
 secrets.properties
 *.jks
 *.keystore
+keystore.properties
+local.properties
+__pycache__/

@@ -11,6 +11,6 @@ class HamrahApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        container = createAppContainer()
+        container = createAppContainer(this)
     }
 }
