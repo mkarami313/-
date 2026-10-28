@@ -4,9 +4,11 @@ import com.hamraheteyf.app.data.DataResult
 import com.hamraheteyf.app.data.model.*
 import com.hamraheteyf.app.data.repository.AuthRepository
 import com.hamraheteyf.app.data.repository.fake.DELETED_USER_ID
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withContext
 
 private fun authError(message: String): DataResult<Nothing> = DataResult.Error(message)
 
@@ -48,7 +50,12 @@ class FirebaseAuthRepository : AuthRepository {
             status = AccountStatus.ACTIVE, joinedAt = now, updatedAt = now,
         )
         return try {
-            db.collection(Fs.USERS).document(uid).set(user.toMap()).await()
+            // NonCancellable is critical: creating the account auto-signs-in, which immediately
+            // navigates away and cancels this coroutine's scope. Without this, the profile write
+            // would be cancelled mid-flight and never reach Firestore.
+            withContext(NonCancellable) {
+                db.collection(Fs.USERS).document(uid).set(user.toMap()).await()
+            }
             DataResult.Success(user)
         } catch (e: Exception) {
             // The auth account was created but the profile write failed: roll back so the user
@@ -95,7 +102,11 @@ class FirebaseAuthRepository : AuthRepository {
             status = AccountStatus.ACTIVE,
             joinedAt = now, updatedAt = now,
         )
-        db.collection(Fs.USERS).document(uid).set(user.toMap()).await()
+        // NonCancellable: login success also navigates away and cancels this scope; the
+        // self-heal write must still complete.
+        withContext(NonCancellable) {
+            db.collection(Fs.USERS).document(uid).set(user.toMap()).await()
+        }
         return user
     }
 
