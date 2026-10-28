@@ -70,9 +70,20 @@ android {
         compose = true
         buildConfig = true
     }
+    // Do not embed the Google Play dependency-metadata blob in the artifact.
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
+    }
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            // Strip build/VCS metadata so the shipped APK carries no git revision,
+            // AGP version, or per-library version markers.
+            excludes += "/META-INF/version-control-info.textproto"
+            excludes += "/META-INF/com/android/build/gradle/app-metadata.properties"
+            excludes += "/META-INF/*.version"
         }
     }
 }
