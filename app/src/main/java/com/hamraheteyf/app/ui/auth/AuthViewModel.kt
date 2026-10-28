@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.hamraheteyf.app.data.DataResult
 import com.hamraheteyf.app.data.model.AccountType
 import com.hamraheteyf.app.data.repository.AuthRepository
+import com.hamraheteyf.app.security.CredentialVault
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -15,7 +16,10 @@ data class AuthUiState(
     val info: String? = null,
 )
 
-class AuthViewModel(private val auth: AuthRepository) : ViewModel() {
+class AuthViewModel(
+    private val auth: AuthRepository,
+    private val vault: CredentialVault? = null,
+) : ViewModel() {
 
     private val _state = MutableStateFlow(AuthUiState())
     val state: StateFlow<AuthUiState> = _state
@@ -24,11 +28,19 @@ class AuthViewModel(private val auth: AuthRepository) : ViewModel() {
         _state.value = _state.value.copy(error = null, info = null)
     }
 
-    fun login(email: String, password: String) {
+    /**
+     * Signs in. When [remember] is set and the sign-in succeeds, the credentials are saved
+     * (encrypted) for later fingerprint sign-in. The save runs here, in the ViewModel scope,
+     * because the login screen is torn down the instant the session becomes active.
+     */
+    fun login(email: String, password: String, remember: Boolean = false) {
         _state.value = AuthUiState(loading = true)
         viewModelScope.launch {
             when (val r = auth.login(email, password)) {
-                is DataResult.Success -> _state.value = AuthUiState() // root switches automatically
+                is DataResult.Success -> {
+                    if (remember) vault?.save(email, password) else vault?.clear()
+                    _state.value = AuthUiState() // root switches automatically
+                }
                 is DataResult.Error -> _state.value = AuthUiState(error = r.message)
             }
         }

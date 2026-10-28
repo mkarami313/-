@@ -8,6 +8,7 @@ composeBom = "2024.12.01"
 navigationCompose = "2.8.5"
 coroutines = "1.9.0"
 serialization = "1.7.3"
+biometric = "1.1.0"
 junit = "4.13.2"
 
 [libraries]
@@ -26,6 +27,7 @@ androidx-navigation-compose = { group = "androidx.navigation", name = "navigatio
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "serialization" }
+androidx-biometric = { group = "androidx.biometric", name = "biometric", version.ref = "biometric" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 
 [plugins]

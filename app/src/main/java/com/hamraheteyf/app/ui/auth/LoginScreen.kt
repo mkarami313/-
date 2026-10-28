@@ -4,30 +4,75 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Fingerprint
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.hamraheteyf.app.data.repository.fake.FakeStore
 import com.hamraheteyf.app.data.repository.fake.SeedData
 import com.hamraheteyf.app.di.LocalAppContainer
 import com.hamraheteyf.app.di.appViewModelFactory
+import com.hamraheteyf.app.security.BiometricGate
+import com.hamraheteyf.app.security.LocalCredentialVault
 import com.hamraheteyf.app.ui.common.BigPrimaryButton
 
 @Composable
 fun LoginScreen(onGoToRegister: () -> Unit) {
     val container = LocalAppContainer.current
-    val vm: AuthViewModel = viewModel(factory = appViewModelFactory { AuthViewModel(container.authRepository) })
+    val vault = LocalCredentialVault.current
+    val context = LocalContext.current
+    val activity = context as? FragmentActivity
+
+    val vm: AuthViewModel = viewModel(
+        factory = appViewModelFactory { AuthViewModel(container.authRepository, vault) }
+    )
     val state by vm.state.collectAsState()
 
-    var email by rememberSaveable { mutableStateOf("") }
+    // Whether this device can offer fingerprint sign-in at all.
+    val biometricPossible = remember { vault.isSupported() && BiometricGate.canAuthenticate(context) && activity != null }
+    var hasSaved by remember { mutableStateOf(vault.hasCredentials()) }
+
+    var email by rememberSaveable { mutableStateOf(vault.savedEmail().orEmpty()) }
     var password by rememberSaveable { mutableStateOf("") }
+    var remember by rememberSaveable { mutableStateOf(biometricPossible) }
+    var bioError by remember { mutableStateOf<String?>(null) }
+
+    fun signInWithFingerprint() {
+        val act = activity ?: return
+        BiometricGate.prompt(
+            activity = act,
+            onSuccess = {
+                val creds = vault.load()
+                if (creds != null) {
+                    email = creds.first
+                    vm.login(creds.first, creds.second, remember = true)
+                } else {
+                    vault.clear(); hasSaved = false
+                    bioError = "خواندن مشخصات ذخیره‌شده ممکن نشد؛ لطفاً با رمز وارد شوید."
+                }
+            },
+            onError = { bioError = it },
+        )
+    }
+
+    // Offer the fingerprint prompt automatically when there is something saved.
+    var autoPrompted by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        if (biometricPossible && hasSaved && !autoPrompted) {
+            autoPrompted = true
+            signInWithFingerprint()
+        }
+    }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
@@ -56,21 +101,54 @@ fun LoginScreen(onGoToRegister: () -> Unit) {
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
         )
 
+        // "Remember me" — enables fingerprint sign-in next time.
+        if (biometricPossible) {
+            Row(
+                Modifier.fillMaxWidth().padding(top = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(checked = remember, onCheckedChange = { remember = it })
+                Text(
+                    "ذخیرهٔ ورود و فعال‌سازی ورود با اثر انگشت",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+        }
+
         state.error?.let {
             Spacer(Modifier.height(8.dp))
             Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
         }
-        state.info?.let {
+        (bioError ?: state.info)?.let {
             Spacer(Modifier.height(8.dp))
-            Text(it, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium)
+            val color = if (bioError != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+            Text(it, color = color, style = MaterialTheme.typography.bodyMedium)
         }
 
         Spacer(Modifier.height(20.dp))
         BigPrimaryButton(
             text = if (state.loading) "در حال ورود…" else "ورود",
-            onClick = { vm.login(email, password) },
+            onClick = { bioError = null; vm.login(email, password, remember) },
             enabled = !state.loading,
         )
+
+        // Fingerprint sign-in (shown only when credentials are saved on this device).
+        if (biometricPossible && hasSaved) {
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = { bioError = null; signInWithFingerprint() },
+                enabled = !state.loading,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Outlined.Fingerprint, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("ورود با اثر انگشت")
+            }
+            TextButton(onClick = { vault.clear(); hasSaved = false }) {
+                Text("حذف ورود ذخیره‌شده روی این دستگاه")
+            }
+        }
+
         Spacer(Modifier.height(8.dp))
         TextButton(onClick = { vm.resetPassword(email) }) { Text("رمز عبور را فراموش کرده‌ام") }
         TextButton(onClick = onGoToRegister) { Text("حساب ندارید؟ ثبت‌نام کنید") }

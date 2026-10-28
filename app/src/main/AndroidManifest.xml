@@ -6,6 +6,8 @@
       makes no network calls. usesCleartextTraffic is false: only HTTPS is allowed.
     -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Fingerprint / biometric sign-in (saved credentials unlocked by the device biometric). -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
     <application
         android:name=".HamrahApplication"
