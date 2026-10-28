@@ -40,6 +40,20 @@ fun ProfileTabScreen(
 
     Scaffold(topBar = { TopAppBar(title = { Text("پروفایل") }) }) { padding ->
         Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState())) {
+            if (user == null) {
+                // Signed in but the profile document hasn't loaded/been created yet. Always
+                // offer a way out so the session can never get stuck.
+                Column(Modifier.fillMaxWidth().padding(24.dp)) {
+                    Text("در حال آماده‌سازی حساب…", style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "اگر ادامه نیافت، یک‌بار خارج و دوباره وارد شوید.",
+                        style = MaterialTheme.typography.bodyMedium, color = mutedColor(),
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    com.hamraheteyf.app.ui.common.BigPrimaryButton(text = "خروج از حساب", onClick = { vm.logout() })
+                }
+            }
             user?.let { u ->
                 Column(Modifier.fillMaxWidth().padding(16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {

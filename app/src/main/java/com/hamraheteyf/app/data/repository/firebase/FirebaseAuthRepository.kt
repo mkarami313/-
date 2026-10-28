@@ -36,36 +36,67 @@ class FirebaseAuthRepository : AuthRepository {
         if (!mail.contains("@")) return authError("ایمیل معتبر وارد کنید.")
         if (password.length < 6) return authError("رمز عبور باید حداقل ۶ نویسه باشد.")
         if (!acceptedTerms) return authError("برای ادامه، قوانین و حریم خصوصی را بپذیرید.")
+        val result = try {
+            auth.createUserWithEmailAndPassword(mail, password).await()
+        } catch (e: Exception) {
+            return authError(friendlyAuthError(e, "ایجاد حساب ناموفق بود."))
+        }
+        val uid = result.user?.uid ?: return authError("ایجاد حساب ناموفق بود.")
+        val now = System.currentTimeMillis()
+        val user = User(
+            id = uid, displayName = name, accountType = accountType, email = mail,
+            status = AccountStatus.ACTIVE, joinedAt = now, updatedAt = now,
+        )
         return try {
-            val result = auth.createUserWithEmailAndPassword(mail, password).await()
-            val uid = result.user?.uid ?: return authError("ایجاد حساب ناموفق بود.")
-            val now = System.currentTimeMillis()
-            val user = User(
-                id = uid, displayName = name, accountType = accountType, email = mail,
-                status = AccountStatus.ACTIVE, joinedAt = now, updatedAt = now,
-            )
             db.collection(Fs.USERS).document(uid).set(user.toMap()).await()
             DataResult.Success(user)
         } catch (e: Exception) {
-            authError(friendlyAuthError(e, "ایجاد حساب ناموفق بود."))
+            // The auth account was created but the profile write failed: roll back so the user
+            // is not left signed-in without a profile, and can retry cleanly.
+            runCatching { auth.currentUser?.delete()?.await() }
+            auth.signOut()
+            authError("ثبت‌نام کامل نشد (ذخیرهٔ پروفایل): " + friendlyAuthError(e, "دوباره تلاش کنید."))
         }
     }
 
-    override suspend fun login(email: String, password: String): DataResult<User> = try {
-        val result = auth.signInWithEmailAndPassword(email.trim(), password).await()
-        val uid = result.user?.uid ?: return authError("ورود ناموفق بود.")
-        val snapshot = db.collection(Fs.USERS).document(uid).get().await()
-        val user = if (snapshot.exists()) userFromDoc(snapshot) else null
-        when {
-            user == null -> authError("حساب یافت نشد.")
-            user.status == AccountStatus.BLOCKED -> {
-                auth.signOut()
-                authError("این حساب مسدود شده است.")
-            }
-            else -> DataResult.Success(user)
+    override suspend fun login(email: String, password: String): DataResult<User> {
+        val result = try {
+            auth.signInWithEmailAndPassword(email.trim(), password).await()
+        } catch (e: Exception) {
+            return authError(friendlyAuthError(e, "ایمیل یا رمز عبور نادرست است."))
         }
-    } catch (e: Exception) {
-        authError(friendlyAuthError(e, "ایمیل یا رمز عبور نادرست است."))
+        val uid = result.user?.uid ?: return authError("ورود ناموفق بود.")
+        return try {
+            val snapshot = db.collection(Fs.USERS).document(uid).get().await()
+            val user = if (snapshot.exists()) userFromDoc(snapshot) else ensureUserDoc(uid, result.user?.email)
+            when {
+                user.status == AccountStatus.BLOCKED -> {
+                    auth.signOut()
+                    authError("این حساب مسدود شده است.")
+                }
+                else -> DataResult.Success(user)
+            }
+        } catch (e: Exception) {
+            authError(friendlyAuthError(e, "ورود ناموفق بود. اتصال اینترنت را بررسی کنید."))
+        }
+    }
+
+    /**
+     * Self-heal: creates a minimal profile document when an authenticated user has none
+     * (e.g. an interrupted sign-up). The user can complete their profile from Settings.
+     */
+    private suspend fun ensureUserDoc(uid: String, email: String?): User {
+        val now = System.currentTimeMillis()
+        val user = User(
+            id = uid,
+            displayName = email?.substringBefore("@")?.ifBlank { null } ?: "کاربر",
+            accountType = AccountType.FAMILY,
+            email = email,
+            status = AccountStatus.ACTIVE,
+            joinedAt = now, updatedAt = now,
+        )
+        db.collection(Fs.USERS).document(uid).set(user.toMap()).await()
+        return user
     }
 
     override fun logout() {
