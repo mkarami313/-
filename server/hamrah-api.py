@@ -28,6 +28,7 @@ CLI:
 """
 
 import os
+import re
 import sys
 import json
 import time
@@ -1297,7 +1298,7 @@ REC_KINDS = {
     "med":      {"mod": "childfile", "scope": "own",   "req": "name",  "fields": ["childName", "name", "dose", "times", "notes"]},
     "schedule": {"mod": "tools",     "scope": "own",   "req": "title", "fields": ["title", "steps"]},
     "story":    {"mod": "tools",     "scope": "own",   "req": "title", "fields": ["title", "pages"]},
-    "aac":      {"mod": "tools",     "scope": "own",   "req": "text",  "fields": ["text", "emoji"]},
+    "aac":      {"mod": "tools",     "scope": "own",   "req": "text",  "fields": ["text", "emoji", "image", "audio", "builtin", "childId"], "files": ["image", "audio"]},
     "slot":     {"mod": "booking",   "scope": "pro",   "req": "when",  "fields": ["when", "duration", "place", "note"]},
     "course":   {"mod": "courses",   "scope": "admin", "req": "title", "fields": ["title", "description", "level", "lessons"]},
     "place":    {"mod": "places",    "scope": "admin", "req": "name",  "fields": ["name", "type", "city", "address", "phone", "lat", "lng", "note"]},
@@ -1380,6 +1381,20 @@ def a_recList(store, uid, args):
     return {"items": [_rec_view(store, d, uid, kind) for d in items[:200]]}
 
 
+def _drop_file(store, uid, fid):
+    """Delete an uploaded file (doc + bytes) if the caller owns it."""
+    doc = store.get("files", fid) if re.fullmatch(r"[0-9a-f]{32}", fid or "") else None
+    if not doc or doc.get("ownerId") != uid:
+        return
+    ext = UPLOAD_TYPES.get(doc.get("mime"))
+    if ext:
+        try:
+            os.remove(os.path.join(UPLOAD_DIR, "%s.%s" % (fid, ext)))
+        except OSError:
+            pass
+    store.delete("files", fid)
+
+
 def a_recSave(store, uid, args):
     _require(uid)
     kind, spec = _rec_kind(args)
@@ -1397,6 +1412,8 @@ def a_recSave(store, uid, args):
         v = _s(data.get(f))
         if len(v) > (5000 if f in REC_LONG else 200):
             raise ApiError("متن یکی از فیلدها بیش از حد طولانی است.")
+        if f in spec.get("files", []) and v and not re.fullmatch(r"[0-9a-f]{32}", v):
+            raise ApiError("شناسهٔ فایل نامعتبر است.")
         clean[f] = v
     if not clean[spec["req"]]:
         raise ApiError("فیلد اصلی را پر کنید.")
@@ -1405,6 +1422,9 @@ def a_recSave(store, uid, args):
     if d:
         if d.get("ownerId") != uid and not admin:
             raise ApiError("اجازهٔ ویرایش ندارید.")
+        for f in spec.get("files", []):
+            if d.get(f) and d.get(f) != clean.get(f):
+                _drop_file(store, uid, d[f])
         d.update(clean)
         d["updatedAt"] = now_ms()
     else:
@@ -1427,6 +1447,9 @@ def a_recDelete(store, uid, args):
     if kind == "slot" and d.get("bookedBy"):
         add_notification(store, d["bookedBy"], "BOOKING", "نوبت لغو شد",
                          "متخصص نوبت «%s» را حذف کرد." % d.get("when", ""), d["id"])
+    for f in REC_KINDS[kind].get("files", []):
+        if d.get(f):
+            _drop_file(store, d.get("ownerId"), d[f])
     store.delete("r_" + kind, d["id"])
 
 
@@ -1704,27 +1727,43 @@ TTS_MAX = 300
 _tts_lock = threading.Lock()
 
 
-def tts_wav(text):
-    """Persian speech via Piper (fa_IR-amir). Results are cached on disk by text hash."""
+def tts_audio(text):
+    """Persian speech -> (bytes, mime). Microsoft neural voice (edge-tts, fa-IR-Dilara) first,
+    Piper (fa_IR-amir, local) as the fallback. Results are cached on disk by text hash."""
     import hashlib, subprocess
     cache = os.path.join(TTS_DIR, "cache")
     os.makedirs(cache, exist_ok=True)
-    path = os.path.join(cache, hashlib.sha1(text.encode("utf-8")).hexdigest() + ".wav")
-    if not os.path.exists(path):
-        with _tts_lock:
-            if not os.path.exists(path):
-                files = sorted((os.path.join(cache, f) for f in os.listdir(cache)), key=os.path.getmtime)
-                for old in files[:-3000]:
-                    os.remove(old)
-                tmp = path + ".part"
-                r = subprocess.run(
-                    [os.path.join(TTS_DIR, "venv/bin/python"), "-m", "piper", "-m", os.path.join(TTS_DIR, "fa_IR-amir-medium.onnx"), "-f", tmp],
-                    input=text.encode("utf-8"), capture_output=True, timeout=60)
-                if r.returncode != 0 or not os.path.exists(tmp):
-                    raise RuntimeError(r.stderr.decode("utf-8", "ignore")[-120:] or "piper failed")
+    h = hashlib.sha1(text.encode("utf-8")).hexdigest()
+    py = os.path.join(TTS_DIR, "venv/bin/python")
+    for ext, mime in (("mp3", "audio/mpeg"), ("wav", "audio/wav")):
+        p = os.path.join(cache, h + "." + ext)
+        if os.path.exists(p):
+            with open(p, "rb") as f:
+                return f.read(), mime
+    with _tts_lock:
+        files = sorted((os.path.join(cache, f) for f in os.listdir(cache)), key=os.path.getmtime)
+        for old in files[:-3000]:
+            os.remove(old)
+        attempts = (
+            ("mp3", "audio/mpeg", [py, "-m", "edge_tts", "--voice", "fa-IR-DilaraNeural", "--file", "-", "--write-media"], None),
+            ("wav", "audio/wav", [py, "-m", "piper", "-m", os.path.join(TTS_DIR, "fa_IR-amir-medium.onnx"), "-f"], None),
+        )
+        err = ""
+        for ext, mime, cmd, _ in attempts:
+            path = os.path.join(cache, h + "." + ext)
+            tmp = path + ".part." + ext
+            try:
+                r = subprocess.run(cmd + [tmp], input=text.encode("utf-8"), capture_output=True, timeout=45)
+            except subprocess.TimeoutExpired:
+                err = "timeout"; continue
+            if r.returncode == 0 and os.path.exists(tmp) and os.path.getsize(tmp) > 500:
                 os.replace(tmp, path)
-    with open(path, "rb") as f:
-        return f.read()
+                with open(path, "rb") as f:
+                    return f.read(), mime
+            err = r.stderr.decode("utf-8", "ignore")[-120:]
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        raise RuntimeError(err or "tts failed")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1785,11 +1824,11 @@ class Handler(BaseHTTPRequestHandler):
             if not text or len(text) > TTS_MAX:
                 return self._send(400, {"ok": False, "error": "متن نامعتبر است."})
             try:
-                body = tts_wav(text)
+                body, mime = tts_audio(text)
             except Exception as e:
                 return self._send(503, {"ok": False, "error": "تبدیل متن به صدا ممکن نشد: %s" % e})
             self.send_response(200)
-            self.send_header("Content-Type", "audio/wav")
+            self.send_header("Content-Type", mime)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "private, max-age=31536000, immutable")
             self.end_headers()
