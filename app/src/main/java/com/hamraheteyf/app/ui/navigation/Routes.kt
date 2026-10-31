@@ -33,6 +33,11 @@ object Routes {
     const val GUIDE_DETAIL = "guide_detail/{guideId}"
     fun guideDetail(id: String) = "guide_detail/$id"
 
+    const val DONATIONS = "donations"
+    const val DONATION_CREATE = "donation_create"
+    const val DONATION_DETAIL = "donation_detail/{donationId}"
+    fun donationDetail(id: String) = "donation_detail/$id"
+
     const val NOTIFICATIONS = "notifications"
     const val SETTINGS = "settings"
     const val EDIT_PROFILE = "edit_profile"

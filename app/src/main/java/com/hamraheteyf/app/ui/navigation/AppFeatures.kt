@@ -8,6 +8,9 @@ import androidx.navigation.compose.composable
 import com.hamraheteyf.app.ui.admin.AdminScreen
 import com.hamraheteyf.app.ui.directory.DirectoryScreen
 import com.hamraheteyf.app.ui.directory.ProfileViewScreen
+import com.hamraheteyf.app.ui.donation.DonationCreateScreen
+import com.hamraheteyf.app.ui.donation.DonationDetailScreen
+import com.hamraheteyf.app.ui.donation.DonationListScreen
 import com.hamraheteyf.app.ui.groups.GroupCreateScreen
 import com.hamraheteyf.app.ui.groups.GroupDetailScreen
 import com.hamraheteyf.app.ui.groups.GroupsListScreen
@@ -69,6 +72,22 @@ object AppFeatures {
         }
     }
 
+    private val donations = AppFeature("donations", "دست‌به‌دست", Icons.Outlined.VolunteerActivism, Routes.DONATIONS, order = 35, homeTile = true) { nav ->
+        composable(Routes.DONATIONS) {
+            DonationListScreen(onBack = { nav.popBackStack() }, onOpen = { nav.navigate(Routes.donationDetail(it)) }, onCreate = { nav.navigate(Routes.DONATION_CREATE) })
+        }
+        composable(Routes.DONATION_CREATE) {
+            DonationCreateScreen(onBack = { nav.popBackStack() }, onCreated = { id -> nav.popBackStack(); nav.navigate(Routes.donationDetail(id)) })
+        }
+        composable(Routes.DONATION_DETAIL) { e ->
+            DonationDetailScreen(
+                id = e.arguments?.getString("donationId").orEmpty(),
+                onBack = { nav.popBackStack() },
+                onOpenConversation = { nav.navigate(Routes.conversation(it)) },
+            )
+        }
+    }
+
     private val guides = AppFeature("guides", "راهنماها", Icons.Outlined.MenuBook, Routes.GUIDES, order = 40, homeTile = true) { nav ->
         composable(Routes.GUIDES) { GuidesScreen(onBack = { nav.popBackStack() }, onOpen = { nav.navigate(Routes.guideDetail(it)) }) }
         composable(Routes.GUIDE_DETAIL) { e ->
@@ -111,7 +130,7 @@ object AppFeatures {
     }
 
     /** Add new modules here. */
-    val all: List<AppFeature> = listOf(home, qa, groups, messages, guides, directory, profile).sortedBy { it.order }
+    val all: List<AppFeature> = listOf(home, qa, groups, messages, donations, guides, directory, profile).sortedBy { it.order }
     val bottomTabs: List<AppFeature> = all.filter { it.bottomTab }
 
     /** Modules currently enabled by the server (core ones are never disabled). */

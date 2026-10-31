@@ -1107,8 +1107,163 @@ def a_setAccountStatus(store, uid, args):
     _log_admin(store, uid, action, "USER", args.get("userId"), reason)
 
 
+# ---- «دست‌به‌دست»: free item donations between families (no payments) ----
+
+DONATION_CATEGORIES = ["لوازم کمک‌آموزشی", "اسباب‌بازی و بازی حسی", "لباس و کفش", "کتاب و کارت آموزشی",
+                       "وسایل درمانی و کمکی", "سایر"]
+DONATION_CONDITIONS = {"NEW": "نو", "GOOD": "سالم و تمیز", "USED": "کارکرده"}
+_FILE_ID_RE = None
+
+
+def _file_ids(urls):
+    import re
+    out = []
+    for u in (urls or [])[:4]:
+        m = re.search(r"files/([0-9a-f]{32})$", str(u))
+        if m and m.group(1) not in out:
+            out.append(m.group(1))
+    return out
+
+
+def _donation_view(store, d, uid):
+    owner = d.get("ownerId") == uid
+    v = {k: d.get(k) for k in ("id", "title", "description", "category", "condition", "city",
+                               "imageIds", "status", "ownerId", "ownerName", "createdAt")}
+    v["mine"] = owner
+    reqs = d.get("requests") or []
+    v["requestCount"] = len(reqs)
+    v["iRequested"] = any(r["userId"] == uid for r in reqs)
+    v["iAmRecipient"] = d.get("recipientId") == uid
+    if owner:
+        v["requests"] = reqs
+        v["recipientId"] = d.get("recipientId")
+    return v
+
+
+def _donation(store, did):
+    d = store.get("donations", did)
+    if not d or d.get("status") == "REMOVED":
+        raise ApiError("این آگهی در دسترس نیست.")
+    return d
+
+
+def a_donationList(store, uid, args):
+    _require(uid)
+    cat, city, mine = _s(args.get("category")), _s(args.get("city")), bool(args.get("mine"))
+    items = []
+    for d in store.all("donations"):
+        if d.get("status") == "REMOVED":
+            continue
+        if mine != (d.get("ownerId") == uid):
+            if mine or d.get("status") == "GIVEN":
+                continue
+        if cat and d.get("category") != cat:
+            continue
+        if city and city not in _s(d.get("city")):
+            continue
+        items.append(d)
+    items.sort(key=lambda d: d.get("createdAt", 0), reverse=True)
+    return {"items": [_donation_view(store, d, uid) for d in items[:100]],
+            "categories": DONATION_CATEGORIES}
+
+
+def a_donationGet(store, uid, args):
+    _require(uid)
+    return {"item": _donation_view(store, _donation(store, args.get("id")), uid)}
+
+
+def a_donationCreate(store, uid, args):
+    _require(uid)
+    me = store.get("users", uid) or {}
+    if me.get("status") in ("BLOCKED", "LIMITED"):
+        raise ApiError("حساب شما اجازهٔ ثبت آگهی ندارد.")
+    title, desc = _s(args.get("title")), _s(args.get("description"))
+    if len(title) < 3 or len(title) > 100:
+        raise ApiError("عنوان باید بین ۳ تا ۱۰۰ نویسه باشد.")
+    if len(desc) > 1000:
+        raise ApiError("توضیحات حداکثر ۱۰۰۰ نویسه.")
+    cat = args.get("category")
+    cond = args.get("condition")
+    if cat not in DONATION_CATEGORIES or cond not in DONATION_CONDITIONS:
+        raise ApiError("دسته‌بندی یا وضعیت کالا نامعتبر است.")
+    mine_open = [d for d in store.all("donations") if d.get("ownerId") == uid and d.get("status") in ("AVAILABLE", "RESERVED")]
+    if len(mine_open) >= 20:
+        raise ApiError("حداکثر ۲۰ آگهی فعال می‌توانید داشته باشید.")
+    did = new_id("don")
+    store.put("donations", {
+        "id": did, "ownerId": uid, "ownerName": me.get("displayName", ""), "title": title,
+        "description": desc, "category": cat, "condition": cond, "city": _s(args.get("city"))[:60],
+        "imageIds": _file_ids(args.get("imageUrls")), "status": "AVAILABLE", "requests": [],
+        "recipientId": None, "createdAt": now_ms(), "updatedAt": now_ms(),
+    })
+    return {"id": did}
+
+
+def a_donationRequest(store, uid, args):
+    _require(uid)
+    d = _donation(store, args.get("id"))
+    if d["ownerId"] == uid:
+        raise ApiError("این آگهی مال خودتان است.")
+    if d["status"] != "AVAILABLE":
+        raise ApiError("این مورد دیگر در دسترس نیست.")
+    if any(r["userId"] == uid for r in d["requests"]):
+        raise ApiError("قبلاً درخواست داده‌اید.")
+    me = store.get("users", uid) or {}
+    d["requests"].append({"userId": uid, "name": me.get("displayName", ""),
+                          "note": _s(args.get("note"))[:300], "createdAt": now_ms()})
+    d["updatedAt"] = now_ms()
+    store.put("donations", d)
+    add_notification(store, d["ownerId"], "DONATION", "درخواست برای «%s»" % d["title"],
+                     "%s این مورد را درخواست کرد." % (me.get("displayName") or "یک کاربر"), related_id=d["id"])
+
+
+def _donation_owner(store, uid, did):
+    d = _donation(store, did)
+    if d["ownerId"] != uid and not is_admin(store, uid):
+        raise ApiError("فقط اهداکننده می‌تواند این کار را انجام دهد.")
+    return d
+
+
+def a_donationApprove(store, uid, args):
+    _require(uid)
+    d = _donation_owner(store, uid, args.get("id"))
+    if d["status"] != "AVAILABLE":
+        raise ApiError("این مورد دیگر در دسترس نیست.")
+    rid = args.get("userId")
+    if not any(r["userId"] == rid for r in d["requests"]):
+        raise ApiError("این کاربر درخواستی ندارد.")
+    d["status"], d["recipientId"], d["updatedAt"] = "RESERVED", rid, now_ms()
+    store.put("donations", d)
+    add_notification(store, rid, "DONATION", "درخواست شما پذیرفته شد",
+                     "«%s» برای شما کنار گذاشته شد. با اهداکننده پیام بدهید." % d["title"], related_id=d["id"])
+
+
+def a_donationMarkGiven(store, uid, args):
+    _require(uid)
+    d = _donation_owner(store, uid, args.get("id"))
+    d["status"], d["updatedAt"] = "GIVEN", now_ms()
+    store.put("donations", d)
+
+
+def a_donationReopen(store, uid, args):
+    _require(uid)
+    d = _donation_owner(store, uid, args.get("id"))
+    d["status"], d["recipientId"], d["updatedAt"] = "AVAILABLE", None, now_ms()
+    store.put("donations", d)
+
+
+def a_donationRemove(store, uid, args):
+    _require(uid)
+    d = _donation_owner(store, uid, args.get("id"))
+    d["status"], d["updatedAt"] = "REMOVED", now_ms()
+    store.put("donations", d)
+
+
+LIGHT_ACTIONS = {n[2:] for n in list(globals()) if n.startswith("a_donation")}
+
+
 CORE_FEATURES = {"home", "profile"}
-KNOWN_FEATURES = {"home", "qa", "groups", "messages", "guides", "directory", "profile"}
+KNOWN_FEATURES = {"home", "qa", "groups", "messages", "guides", "directory", "donations", "profile"}
 
 
 def disabled_features(store):
@@ -1418,7 +1573,8 @@ class Handler(BaseHTTPRequestHandler):
                 resp = {"ok": True}
                 if data:
                     resp["data"] = data
-                resp["state"] = build_state(store, uid)  # fresh snapshot saves a round-trip
+                if name not in LIGHT_ACTIONS:
+                    resp["state"] = build_state(store, uid)  # fresh snapshot saves a round-trip
                 return self._send(200, resp)
             return self._send(404, {"ok": False, "error": "یافت نشد."})
         except ApiError as e:

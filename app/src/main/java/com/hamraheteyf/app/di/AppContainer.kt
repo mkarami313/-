@@ -22,6 +22,9 @@ interface AppContainer {
     val reportRepository: ReportRepository
     val notificationRepository: NotificationRepository
     val adminRepository: AdminRepository
+
+    /** Raw API access for self-contained modules (null in the offline DEMO backend). */
+    val serverApi: HamrahApi? get() = null
 }
 
 /**
@@ -41,6 +44,7 @@ class ServerAppContainer(context: Context) : AppContainer {
     override val reportRepository: ReportRepository = ServerReportRepository(store)
     override val notificationRepository: NotificationRepository = ServerNotificationRepository(store)
     override val adminRepository: AdminRepository = ServerAdminRepository(store)
+    override val serverApi: HamrahApi? = store.api
 }
 
 /**

@@ -39,6 +39,7 @@ internal fun Db.addNotification(
         NotificationType.GROUP_REPLY -> recipient.notificationSettings.groupReply
         NotificationType.VERIFICATION_RESULT -> recipient.notificationSettings.verificationResult
         NotificationType.SAFETY_NOTICE -> recipient.notificationSettings.safetyNotice
+        NotificationType.DONATION -> true
     }
     if (!enabled) return this
     val n = Notification(

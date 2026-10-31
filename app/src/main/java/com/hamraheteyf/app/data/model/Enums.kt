@@ -131,7 +131,8 @@ enum class NotificationType(val label: String) {
     GROUP_JOIN_REQUEST("درخواست عضویت در گروه"),
     GROUP_REPLY("پاسخ در گروه"),
     VERIFICATION_RESULT("نتیجهٔ بررسی تخصص"),
-    SAFETY_NOTICE("اطلاعیهٔ ایمنی یا تغییر قوانین");
+    SAFETY_NOTICE("اطلاعیهٔ ایمنی یا تغییر قوانین"),
+    DONATION("دست‌به‌دست");
 }
 
 @Serializable

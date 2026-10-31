@@ -125,6 +125,8 @@ class HamrahApi(context: Context) {
             .fold({ ApiResult.Ok(Unit) }, { ApiResult.Ok(Unit) })
     }
 
+    fun fileUrl(id: String): String = base + "files/" + id
+
     /** Uploads one file (image/audio/video/PDF, up to 8 MB). Returns the absolute URL of the stored file. */
     suspend fun upload(bytes: ByteArray, mime: String, name: String): ApiResult<String> = withContext(Dispatchers.IO) {
         runCatching {
