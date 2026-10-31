@@ -101,8 +101,8 @@ private fun DonationCard(d: DonationItem, client: DonationClient, onClick: () ->
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
-        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            val thumb = Modifier.size(84.dp).clip(RoundedCornerShape(12.dp))
+        Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            val thumb = Modifier.size(60.dp).clip(RoundedCornerShape(10.dp))
             if (d.imageIds.isNotEmpty()) RemoteImage(client.imageUrl(d.imageIds[0]), thumb)
             else Box(thumb.then(Modifier), contentAlignment = Alignment.Center) {
                 Surface(color = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.fillMaxSize()) {

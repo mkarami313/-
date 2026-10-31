@@ -47,7 +47,7 @@ fun CategoryChip(text: String, accent: Boolean = false) {
     Surface(color = container, shape = MaterialTheme.shapes.small) {
         Text(
             text, style = MaterialTheme.typography.labelMedium, color = content,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
         )
     }
 }
@@ -68,17 +68,17 @@ private fun SoftCard(onClick: () -> Unit, content: @Composable ColumnScope.() ->
 @Composable
 fun QuestionCard(question: Question, author: AuthorView, onClick: () -> Unit) {
     SoftCard(onClick) {
-        Column(Modifier.padding(16.dp)) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 CategoryChip(question.category.label)
                 Spacer(Modifier.width(8.dp))
                 author.badge?.let { AuthorBadgeChip(it) }
             }
-            Spacer(Modifier.height(10.dp))
-            Text(question.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.height(6.dp))
+            Text(question.title, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.height(4.dp))
-            Text(question.body, style = MaterialTheme.typography.bodyMedium, color = mutedColor(), maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Spacer(Modifier.height(12.dp))
+            Text(question.body, style = MaterialTheme.typography.bodyMedium, color = mutedColor(), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Avatar(author.name, size = 28)
                 Spacer(Modifier.width(8.dp))
@@ -99,10 +99,10 @@ fun QuestionCard(question: Question, author: AuthorView, onClick: () -> Unit) {
 @Composable
 fun GroupCard(group: Group, onClick: () -> Unit) {
     SoftCard(onClick) {
-        Column(Modifier.padding(16.dp)) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
-                    Modifier.size(40.dp).clip(MaterialTheme.shapes.small).background(MaterialTheme.colorScheme.primaryContainer),
+                    Modifier.size(34.dp).clip(MaterialTheme.shapes.small).background(MaterialTheme.colorScheme.primaryContainer),
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(Icons.Outlined.Group, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
@@ -111,9 +111,9 @@ fun GroupCard(group: Group, onClick: () -> Unit) {
                 Text(group.title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 CategoryChip(group.visibility.label, accent = true)
             }
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(6.dp))
             Text(group.description, style = MaterialTheme.typography.bodyMedium, color = mutedColor(), maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(6.dp))
             val meta = buildList {
                 group.category?.let { add(it) }
                 group.city?.let { add(it) }
@@ -127,9 +127,9 @@ fun GroupCard(group: Group, onClick: () -> Unit) {
 @Composable
 fun GuideCard(guide: GuideArticle, onClick: () -> Unit) {
     SoftCard(onClick) {
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.padding(horizontal = 12.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
-                Modifier.size(46.dp).clip(MaterialTheme.shapes.small).background(MaterialTheme.colorScheme.secondaryContainer),
+                Modifier.size(38.dp).clip(MaterialTheme.shapes.small).background(MaterialTheme.colorScheme.secondaryContainer),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(Icons.Outlined.MenuBook, contentDescription = null, tint = MaterialTheme.colorScheme.secondary, modifier = Modifier.size(24.dp))
@@ -144,7 +144,7 @@ fun GuideCard(guide: GuideArticle, onClick: () -> Unit) {
                     }
                 }
                 Spacer(Modifier.height(8.dp))
-                Text(guide.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(guide.title, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(4.dp))
                 Text("نویسنده: ${guide.authorName}", style = MaterialTheme.typography.labelMedium, color = mutedColor())
             }

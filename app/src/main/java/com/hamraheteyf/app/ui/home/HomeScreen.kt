@@ -61,10 +61,10 @@ fun HomeScreen(
         Column(
             Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState())
                 .padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Surface(
-                onClick = { onNavigate(Routes.DIRECTORY) },
+                onClick = { onNavigate(Routes.SEARCH) },
                 shape = RoundedCornerShape(14.dp),
                 color = MaterialTheme.colorScheme.surfaceVariant,
                 modifier = Modifier.fillMaxWidth(),
@@ -72,7 +72,7 @@ fun HomeScreen(
                 Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Outlined.Search, contentDescription = null, tint = mutedColor(), modifier = Modifier.size(20.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text("جست‌وجوی متخصصان و موضوع‌ها", style = MaterialTheme.typography.bodyMedium, color = mutedColor())
+                    Text("جست‌وجو در همه‌جا: پرسش، گروه، دوره، مرکز…", style = MaterialTheme.typography.bodyMedium, color = mutedColor())
                 }
             }
 
@@ -114,10 +114,10 @@ private fun ActionTile(
 ) {
     val bg = if (primary) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primaryContainer
     val fg = if (primary) Color.White else MaterialTheme.colorScheme.onPrimaryContainer
-    Surface(onClick = onClick, shape = RoundedCornerShape(16.dp), color = bg, modifier = modifier.heightIn(min = 64.dp)) {
-        Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, contentDescription = null, tint = fg, modifier = Modifier.size(26.dp))
-            Spacer(Modifier.width(10.dp))
+    Surface(onClick = onClick, shape = RoundedCornerShape(16.dp), color = bg, modifier = modifier.heightIn(min = 46.dp)) {
+        Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, contentDescription = null, tint = fg, modifier = Modifier.size(22.dp))
+            Spacer(Modifier.width(8.dp))
             Text(label, style = MaterialTheme.typography.titleSmall, color = fg, maxLines = 1)
         }
     }

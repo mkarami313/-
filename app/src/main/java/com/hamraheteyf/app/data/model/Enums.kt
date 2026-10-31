@@ -132,7 +132,8 @@ enum class NotificationType(val label: String) {
     GROUP_REPLY("پاسخ در گروه"),
     VERIFICATION_RESULT("نتیجهٔ بررسی تخصص"),
     SAFETY_NOTICE("اطلاعیهٔ ایمنی یا تغییر قوانین"),
-    DONATION("دست‌به‌دست");
+    DONATION("دست‌به‌دست"),
+    BOOKING("نوبت‌دهی");
 }
 
 @Serializable

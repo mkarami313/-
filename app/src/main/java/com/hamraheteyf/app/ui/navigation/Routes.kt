@@ -38,6 +38,18 @@ object Routes {
     const val DONATION_DETAIL = "donation_detail/{donationId}"
     fun donationDetail(id: String) = "donation_detail/$id"
 
+    const val CHILDFILE = "childfile"
+    const val BOOKING = "booking"
+    const val TOOLS = "tools"
+    const val TOOLS_SCHEDULE = "tools_schedule"
+    const val TOOLS_STORIES = "tools_stories"
+    const val TOOLS_AAC = "tools_aac"
+    const val COURSES = "courses"
+    const val COURSE_DETAIL = "course_detail/{courseId}"
+    fun courseDetail(id: String) = "course_detail/$id"
+    const val PLACES = "places"
+    const val SEARCH = "search"
+
     const val NOTIFICATIONS = "notifications"
     const val SETTINGS = "settings"
     const val EDIT_PROFILE = "edit_profile"

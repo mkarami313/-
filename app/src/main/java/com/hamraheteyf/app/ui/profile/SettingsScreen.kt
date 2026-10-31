@@ -10,6 +10,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.hamraheteyf.app.data.model.NotificationSettings
 import com.hamraheteyf.app.data.model.PrivacySettings
@@ -67,6 +68,8 @@ fun SettingsScreen(onBack: () -> Unit) {
                 }
             }
 
+            SectionTitle("به‌روزرسانی برنامه")
+            UpdateRow()
             SectionTitle("حساب و داده‌ها")
             OutlinedButton(onClick = { vm.exportMyData() }, modifier = Modifier.fillMaxWidth()) { Text("درخواست نسخهٔ اطلاعات حساب") }
             Spacer(Modifier.height(8.dp))
@@ -120,4 +123,25 @@ private fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Un
         Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
         Switch(checked = checked, onCheckedChange = onChange)
     }
+}
+
+@Composable
+private fun UpdateRow() {
+    val scope = rememberCoroutineScope()
+    var info by remember { mutableStateOf<com.hamraheteyf.app.update.UpdateInfo?>(null) }
+    var status by remember { mutableStateOf("نسخهٔ فعلی: ${com.hamraheteyf.app.BuildConfig.VERSION_NAME}") }
+    var busy by remember { mutableStateOf(false) }
+    Text(status, style = MaterialTheme.typography.bodyMedium, color = mutedColor())
+    Spacer(Modifier.height(6.dp))
+    OutlinedButton(enabled = !busy, modifier = Modifier.fillMaxWidth(), onClick = {
+        busy = true; status = "در حال بررسی…"
+        scope.launch {
+            runCatching { com.hamraheteyf.app.update.AppUpdater.check() }.fold(
+                { r -> info = r; status = if (r == null) "برنامه به‌روز است (${com.hamraheteyf.app.BuildConfig.VERSION_NAME})" else "نسخهٔ ${r.versionName} موجود است" },
+                { status = "بررسی ناموفق بود؛ اینترنت را کنترل کنید." },
+            )
+            busy = false
+        }
+    }) { Text("بررسی به‌روزرسانی") }
+    info?.let { com.hamraheteyf.app.update.UpdateDialog(it) { info = null } }
 }

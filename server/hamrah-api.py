@@ -23,6 +23,7 @@ CLI:
   python3 hamrah-api.py                      # run the server
   python3 hamrah-api.py init-db              # create tables + seed guides (idempotent)
   python3 hamrah-api.py feature ID on|off                 # toggle a module for all users
+  python3 hamrah-api.py perm ID ROLE,ROLE|all             # restrict a module to account types
   python3 hamrah-api.py create-admin EMAIL PASSWORD "نام"   # make/replace an admin account
 """
 
@@ -1259,11 +1260,10 @@ def a_donationRemove(store, uid, args):
     store.put("donations", d)
 
 
-LIGHT_ACTIONS = {n[2:] for n in list(globals()) if n.startswith("a_donation")}
 
 
 CORE_FEATURES = {"home", "profile"}
-KNOWN_FEATURES = {"home", "qa", "groups", "messages", "guides", "directory", "donations", "profile"}
+KNOWN_FEATURES = {"home", "qa", "groups", "messages", "guides", "directory", "donations", "childfile", "booking", "tools", "courses", "places", "profile"}
 
 
 def disabled_features(store):
@@ -1288,6 +1288,253 @@ def a_setFeatureEnabled(store, uid, args):
     fid = _s(args.get("id"))
     set_feature(store, fid, bool(args.get("enabled")))
     _log_admin(store, uid, "SET_FEATURE", "FEATURE", fid, "enabled=%s" % bool(args.get("enabled")))
+
+
+# ---- Generic records: child file, tools, booking, courses, places/events ----
+
+REC_KINDS = {
+    "diary":    {"mod": "childfile", "scope": "own",   "req": "note",  "fields": ["childName", "date", "mood", "note"]},
+    "med":      {"mod": "childfile", "scope": "own",   "req": "name",  "fields": ["childName", "name", "dose", "times", "notes"]},
+    "schedule": {"mod": "tools",     "scope": "own",   "req": "title", "fields": ["title", "steps"]},
+    "story":    {"mod": "tools",     "scope": "own",   "req": "title", "fields": ["title", "pages"]},
+    "aac":      {"mod": "tools",     "scope": "own",   "req": "text",  "fields": ["text", "emoji"]},
+    "slot":     {"mod": "booking",   "scope": "pro",   "req": "when",  "fields": ["when", "duration", "place", "note"]},
+    "course":   {"mod": "courses",   "scope": "admin", "req": "title", "fields": ["title", "description", "level", "lessons"]},
+    "place":    {"mod": "places",    "scope": "admin", "req": "name",  "fields": ["name", "type", "city", "address", "phone", "lat", "lng", "note"]},
+    "event":    {"mod": "places",    "scope": "admin", "req": "title", "fields": ["title", "date", "city", "address", "description", "link"]},
+}
+REC_LONG = {"note", "notes", "steps", "pages", "lessons", "description"}
+REC_PER_USER = 300
+ROLES = ["FAMILY", "PROFESSIONAL", "EDUCATOR", "SOCIAL_WORKER", "COMMUNITY"]
+
+
+def module_roles(store):
+    return (store.get("config", "perms") or {}).get("roles", {})
+
+
+def blocked_modules(store, uid):
+    """Modules this caller must not use: switched off for everyone, or restricted to other roles."""
+    out = set(disabled_features(store))
+    if is_admin(store, uid):
+        return out
+    role = (store.get("users", uid) or {}).get("accountType") or "FAMILY"
+    for mod, roles in module_roles(store).items():
+        if roles and role not in roles:
+            out.add(mod)
+    return out
+
+
+def module_of(name, args):
+    if name.startswith("donation"):
+        return "donations"
+    if name in ("recList", "recSave", "recDelete"):
+        k = REC_KINDS.get(_s(args.get("kind")))
+        return k["mod"] if k else None
+    if name in ("slotBook", "slotCancel"):
+        return "booking"
+    return None
+
+
+def _rec_kind(args):
+    kind = _s(args.get("kind"))
+    if kind not in REC_KINDS:
+        raise ApiError("نوع داده نامعتبر است.")
+    return kind, REC_KINDS[kind]
+
+
+def _rec_view(store, d, uid, kind):
+    out = {k: d.get(k, "") for k in REC_KINDS[kind]["fields"]}
+    out.update(id=d["id"], ownerId=d.get("ownerId"), ownerName=d.get("ownerName", ""),
+               createdAt=d.get("createdAt", 0), mine=d.get("ownerId") == uid)
+    if kind == "slot":
+        out["status"] = d.get("status", "OPEN")
+        out["iBooked"] = d.get("bookedBy") == uid
+        if d.get("ownerId") == uid:
+            out["bookedByName"] = d.get("bookedByName", "")
+            out["bookedBy"] = d.get("bookedBy", "")
+    return out
+
+
+def a_recList(store, uid, args):
+    _require(uid)
+    kind, spec = _rec_kind(args)
+    mine, booked = bool(args.get("mine")), bool(args.get("booked"))
+    items = []
+    for d in store.all("r_" + kind):
+        if d.get("status") == "REMOVED":
+            continue
+        own = d.get("ownerId") == uid
+        if spec["scope"] == "own" and not own:
+            continue
+        if kind == "slot":
+            if booked and d.get("bookedBy") != uid:
+                continue
+            if not booked and mine != own:
+                continue
+            if not booked and not mine and d.get("status") == "BOOKED":
+                continue
+        elif mine and not own:
+            continue
+        items.append(d)
+    items.sort(key=lambda d: d.get("createdAt", 0), reverse=True)
+    return {"items": [_rec_view(store, d, uid, kind) for d in items[:200]]}
+
+
+def a_recSave(store, uid, args):
+    _require(uid)
+    kind, spec = _rec_kind(args)
+    me = store.get("users", uid) or {}
+    if me.get("status") in ("BLOCKED", "LIMITED"):
+        raise ApiError("حساب شما اجازهٔ این کار را ندارد.")
+    admin = is_admin(store, uid)
+    if spec["scope"] == "admin" and not admin:
+        raise ApiError("فقط مدیر می‌تواند این مورد را ثبت کند.")
+    if spec["scope"] == "pro" and not (admin or me.get("accountType") in PRO_TYPES):
+        raise ApiError("فقط متخصصان می‌توانند نوبت ثبت کنند.")
+    data = args.get("data") or {}
+    clean = {}
+    for f in spec["fields"]:
+        v = _s(data.get(f))
+        if len(v) > (5000 if f in REC_LONG else 200):
+            raise ApiError("متن یکی از فیلدها بیش از حد طولانی است.")
+        clean[f] = v
+    if not clean[spec["req"]]:
+        raise ApiError("فیلد اصلی را پر کنید.")
+    rid = _s(args.get("id"))
+    d = store.get("r_" + kind, rid) if rid else None
+    if d:
+        if d.get("ownerId") != uid and not admin:
+            raise ApiError("اجازهٔ ویرایش ندارید.")
+        d.update(clean)
+        d["updatedAt"] = now_ms()
+    else:
+        if sum(1 for x in store.all("r_" + kind) if x.get("ownerId") == uid) >= REC_PER_USER:
+            raise ApiError("به سقف تعداد رسیدید.")
+        d = dict(clean, id=new_id("r"), ownerId=uid, ownerName=me.get("displayName", ""),
+                 status="OPEN" if kind == "slot" else "ACTIVE", createdAt=now_ms(), updatedAt=now_ms())
+    store.put("r_" + kind, d)
+    return {"id": d["id"]}
+
+
+def a_recDelete(store, uid, args):
+    _require(uid)
+    kind, spec = _rec_kind(args)
+    d = store.get("r_" + kind, _s(args.get("id")))
+    if not d:
+        raise ApiError("یافت نشد.")
+    if d.get("ownerId") != uid and not is_admin(store, uid):
+        raise ApiError("اجازهٔ حذف ندارید.")
+    if kind == "slot" and d.get("bookedBy"):
+        add_notification(store, d["bookedBy"], "BOOKING", "نوبت لغو شد",
+                         "متخصص نوبت «%s» را حذف کرد." % d.get("when", ""), d["id"])
+    store.delete("r_" + kind, d["id"])
+
+
+def _slot(store, args):
+    d = store.get("r_slot", _s(args.get("id")))
+    if not d or d.get("status") == "REMOVED":
+        raise ApiError("این نوبت دیگر وجود ندارد.")
+    return d
+
+
+def a_slotBook(store, uid, args):
+    _require(uid)
+    d = _slot(store, args)
+    me = store.get("users", uid) or {}
+    if d.get("ownerId") == uid:
+        raise ApiError("نوبت خودتان را نمی‌توانید رزرو کنید.")
+    if me.get("status") in ("BLOCKED", "LIMITED"):
+        raise ApiError("حساب شما اجازهٔ رزرو ندارد.")
+    if d.get("status") != "OPEN":
+        raise ApiError("این نوبت قبلاً رزرو شده است.")
+    d.update(status="BOOKED", bookedBy=uid, bookedByName=me.get("displayName", ""), updatedAt=now_ms())
+    store.put("r_slot", d)
+    add_notification(store, d["ownerId"], "BOOKING", "نوبت جدید رزرو شد",
+                     "%s نوبت «%s» را رزرو کرد." % (me.get("displayName", "کاربر"), d.get("when", "")), d["id"])
+
+
+def a_slotCancel(store, uid, args):
+    _require(uid)
+    d = _slot(store, args)
+    if uid not in (d.get("bookedBy"), d.get("ownerId")):
+        raise ApiError("اجازهٔ لغو ندارید.")
+    if d.get("status") != "BOOKED":
+        return
+    other = d["ownerId"] if uid == d.get("bookedBy") else d.get("bookedBy")
+    d.update(status="OPEN", bookedBy="", bookedByName="", updatedAt=now_ms())
+    store.put("r_slot", d)
+    add_notification(store, other, "BOOKING", "رزرو لغو شد",
+                     "رزرو نوبت «%s» لغو شد." % d.get("when", ""), d["id"])
+
+
+def a_search(store, uid, args):
+    _require(uid)
+    q = _s(args.get("q")).lower()
+    if len(q) < 2:
+        raise ApiError("حداقل دو نویسه وارد کنید.")
+    off = blocked_modules(store, uid)
+    out = []
+
+    def hit(*parts):
+        return any(q in _s(x).lower() for x in parts)
+
+    def add(t, d, title, sub=""):
+        if len(out) < 60:
+            out.append({"type": t, "id": d["id"], "title": title, "sub": sub})
+
+    if "qa" not in off:
+        for d in store.all("questions"):
+            if d.get("status") == "PUBLISHED" and hit(d.get("title"), d.get("body")):
+                add("question", d, d.get("title", ""), "پرسش")
+    if "groups" not in off:
+        for d in store.all("groups"):
+            if d.get("visibility") == "PUBLIC" and d.get("status") != "REMOVED" and hit(d.get("title"), d.get("description")):
+                add("group", d, d.get("title", ""), "گروه")
+    if "guides" not in off:
+        for d in store.all("guides"):
+            if d.get("status") == "PUBLISHED" and hit(d.get("title")):
+                add("guide", d, d.get("title", ""), "راهنما")
+    if "directory" not in off:
+        for d in store.all("users"):
+            if d.get("accountType") in PRO_TYPES and d.get("status") not in ("BLOCKED",) and hit(d.get("displayName"), d.get("city"), d.get("bio")):
+                add("user", d, d.get("displayName", ""), "متخصص" + (" · " + d["city"] if d.get("city") else ""))
+    if "donations" not in off:
+        for d in store.all("donations"):
+            if d.get("status") in ("AVAILABLE", "RESERVED") and hit(d.get("title"), d.get("description"), d.get("city")):
+                add("donation", d, d.get("title", ""), "دست‌به‌دست")
+    for kind, label, fields in (("course", "دوره آموزشی", ("title", "description")),
+                                ("place", "مرکز", ("name", "city", "type")),
+                                ("event", "رویداد", ("title", "city", "description"))):
+        if REC_KINDS[kind]["mod"] in off:
+            continue
+        for d in store.all("r_" + kind):
+            if hit(*[d.get(f) for f in fields]):
+                add(kind, d, d.get(REC_KINDS[kind]["req"], ""), label)
+    return {"items": out}
+
+
+def a_setModuleRoles(store, uid, args):
+    _require(uid)
+    if not is_admin(store, uid):
+        raise ApiError("دسترسی مدیر لازم است.")
+    set_module_roles(store, _s(args.get("id")), args.get("roles") or [])
+    _log_admin(store, uid, "SET_MODULE_ROLES", "FEATURE", _s(args.get("id")), ",".join(args.get("roles") or []))
+
+
+def set_module_roles(store, fid, roles):
+    if fid in CORE_FEATURES or fid not in KNOWN_FEATURES:
+        raise ApiError("ماژول نامعتبر یا پایه است.")
+    roles = [r for r in roles if r in ROLES]
+    doc = store.get("config", "perms") or {"id": "perms", "roles": {}}
+    if roles:
+        doc["roles"][fid] = roles
+    else:
+        doc["roles"].pop(fid, None)
+    store.put("config", doc)
+
+
+LIGHT_PREFIXES = ("a_donation", "a_rec", "a_slot", "a_search")
+LIGHT_ACTIONS = {n[2:] for n in list(globals()) if n.startswith(LIGHT_PREFIXES)}
 
 
 ACTIONS = {name[2:]: fn for name, fn in list(globals().items())
@@ -1506,7 +1753,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"ok": True})
         if self.path.rstrip("/") == "/api/features":
             try:
-                return self._send(200, {"ok": True, "disabled": disabled_features(Store())})
+                store = Store()
+                uid = self._uid()
+                off = blocked_modules(store, uid) if uid else set(disabled_features(store))
+                return self._send(200, {"ok": True, "disabled": sorted(off)})
             except Exception as e:
                 return self._send(500, {"ok": False, "error": "خطای سرور: %s" % e})
         if self.path.rstrip("/") == "/api/notifications":
@@ -1569,6 +1819,9 @@ class Handler(BaseHTTPRequestHandler):
                 if not fn:
                     return self._send(404, {"ok": False, "error": "عملیات ناشناخته."})
                 store = Store()
+                mod = module_of(name, args.get("args") or {})
+                if mod and mod in blocked_modules(store, uid):
+                    return self._send(200, {"ok": False, "error": "این بخش برای شما فعال نیست."})
                 data = fn(store, uid, args.get("args") or {})
                 resp = {"ok": True}
                 if data:
@@ -1638,6 +1891,9 @@ def main():
         cmd = sys.argv[1]
         if cmd == "init-db":
             return cmd_init_db()
+        if cmd == "perm":  # perm ID ROLE,ROLE|all
+            set_module_roles(Store(), sys.argv[2], [] if sys.argv[3] == "all" else sys.argv[3].split(","))
+            return print("roles:", module_roles(Store()))
         if cmd == "feature":  # feature ID on|off
             set_feature(Store(), sys.argv[2], sys.argv[3] == "on")
             return print("disabled:", disabled_features(Store()))

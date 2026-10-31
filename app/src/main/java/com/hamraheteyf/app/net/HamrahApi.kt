@@ -154,7 +154,7 @@ class HamrahApi(context: Context) {
     /** Ids of modules the server has switched off. Null when the call fails (keep the last known set). */
     suspend fun fetchDisabledFeatures(): Set<String>? = withContext(Dispatchers.IO) {
         runCatching {
-            val obj = parse(request("GET", "features", null, auth = false).body)
+            val obj = parse(request("GET", "features", null, auth = true).body)
             obj?.get("disabled")?.let { el -> json.decodeFromJsonElement(kotlinx.serialization.builtins.ListSerializer(kotlinx.serialization.serializer<String>()), el).toSet() }
         }.getOrNull()
     }

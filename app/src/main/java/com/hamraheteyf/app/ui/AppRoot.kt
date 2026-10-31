@@ -22,7 +22,7 @@ import com.hamraheteyf.app.ui.navigation.Routes
 fun AppRoot() {
     val container = LocalAppContainer.current
     val userId by container.authRepository.currentUserId.collectAsState()
-    if (userId == null) AuthNavHost() else MainNavHost()
+    if (userId == null) AuthNavHost() else { MainNavHost(); com.hamraheteyf.app.update.UpdateHost() }
 }
 
 @Composable

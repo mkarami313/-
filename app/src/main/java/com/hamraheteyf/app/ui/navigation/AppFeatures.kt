@@ -23,6 +23,7 @@ import com.hamraheteyf.app.ui.messages.ConversationScreen
 import com.hamraheteyf.app.ui.messages.ConversationsListScreen
 import com.hamraheteyf.app.ui.notifications.NotificationsScreen
 import com.hamraheteyf.app.ui.profile.*
+import com.hamraheteyf.app.ui.modules.*
 import com.hamraheteyf.app.ui.qa.QaCreateScreen
 import com.hamraheteyf.app.ui.qa.QaDetailScreen
 import com.hamraheteyf.app.ui.qa.QaListScreen
@@ -88,6 +89,43 @@ object AppFeatures {
         }
     }
 
+    private val childfile = AppFeature("childfile", "پروندهٔ کودک", Icons.Outlined.ChildCare, Routes.CHILDFILE, order = 36, homeTile = true) { nav ->
+        composable(Routes.CHILDFILE) { ChildFileScreen(onBack = { nav.popBackStack() }) }
+    }
+
+    private val booking = AppFeature("booking", "نوبت‌دهی", Icons.Outlined.EventAvailable, Routes.BOOKING, order = 37, homeTile = true) { nav ->
+        composable(Routes.BOOKING) { BookingScreen(onBack = { nav.popBackStack() }) }
+    }
+
+    private val tools = AppFeature("tools", "ابزارهای روزانه", Icons.Outlined.Extension, Routes.TOOLS, order = 38, homeTile = true) { nav ->
+        composable(Routes.TOOLS) {
+            ToolsHubScreen(onBack = { nav.popBackStack() }, onSchedule = { nav.navigate(Routes.TOOLS_SCHEDULE) },
+                onStories = { nav.navigate(Routes.TOOLS_STORIES) }, onAac = { nav.navigate(Routes.TOOLS_AAC) })
+        }
+        composable(Routes.TOOLS_SCHEDULE) { ScheduleScreen(onBack = { nav.popBackStack() }) }
+        composable(Routes.TOOLS_STORIES) { StoriesScreen(onBack = { nav.popBackStack() }) }
+        composable(Routes.TOOLS_AAC) { AacScreen(onBack = { nav.popBackStack() }) }
+    }
+
+    private val courses = AppFeature("courses", "دوره‌ها", Icons.Outlined.School, Routes.COURSES, order = 39, homeTile = true) { nav ->
+        composable(Routes.COURSES) { CoursesScreen(onBack = { nav.popBackStack() }, onOpen = { nav.navigate(Routes.courseDetail(it)) }) }
+        composable(Routes.COURSE_DETAIL) { e -> CourseDetailScreen(courseId = e.arguments?.getString("courseId").orEmpty(), onBack = { nav.popBackStack() }) }
+    }
+
+    private val places = AppFeature("places", "مراکز و رویدادها", Icons.Outlined.Place, Routes.PLACES, order = 40, homeTile = true) { nav ->
+        composable(Routes.PLACES) { PlacesScreen(onBack = { nav.popBackStack() }) }
+        composable(Routes.SEARCH) {
+            SearchScreen(onBack = { nav.popBackStack() }, onOpen = { h ->
+                val r = when (h.type) {
+                    "question" -> Routes.qaDetail(h.id); "group" -> Routes.groupDetail(h.id); "guide" -> Routes.guideDetail(h.id)
+                    "user" -> Routes.profileView(h.id); "donation" -> Routes.donationDetail(h.id); "course" -> Routes.courseDetail(h.id)
+                    else -> Routes.PLACES
+                }
+                nav.navigate(r)
+            })
+        }
+    }
+
     private val guides = AppFeature("guides", "راهنماها", Icons.Outlined.MenuBook, Routes.GUIDES, order = 40, homeTile = true) { nav ->
         composable(Routes.GUIDES) { GuidesScreen(onBack = { nav.popBackStack() }, onOpen = { nav.navigate(Routes.guideDetail(it)) }) }
         composable(Routes.GUIDE_DETAIL) { e ->
@@ -130,7 +168,7 @@ object AppFeatures {
     }
 
     /** Add new modules here. */
-    val all: List<AppFeature> = listOf(home, qa, groups, messages, donations, guides, directory, profile).sortedBy { it.order }
+    val all: List<AppFeature> = listOf(home, qa, groups, messages, donations, childfile, booking, tools, courses, places, guides, directory, profile).sortedBy { it.order }
     val bottomTabs: List<AppFeature> = all.filter { it.bottomTab }
 
     /** Modules currently enabled by the server (core ones are never disabled). */
