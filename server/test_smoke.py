@@ -27,6 +27,7 @@ spec.loader.exec_module(H)
 
 PASS = FAIL = 0
 RUN = uuid.uuid4().hex[:8]
+START = time.time()
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
 ZERO = "0" * 32
 made = []  # (token, uid)
@@ -565,9 +566,16 @@ def v14_tests(atok, auid, ta, ua, tb, ub):
     # S14 admin stats + broadcast
     st = act(atok, "adminStats").get("data", {})
     check("S14 adminStats has moduleRoles/disabledFeatures", "moduleRoles" in st and "disabledFeatures" in st, list(st))
-    r = act(atok, "adminBroadcast", {"title": "آزمون", "body": "پیام آزمایشی"})
-    bd = r.get("data", {})
-    check("S14 adminBroadcast returns counts", r.get("ok") and "sent" in bd and "skipped" in bd, r)
+    # never broadcast to ALL: the suite runs against the prod DB. Target a role with no real users.
+    edu = sql("SELECT count(*) FROM docs WHERE collection='users' AND data->>'accountType'='EDUCATOR'")[0][0]
+    if edu == 0:
+        sql("UPDATE docs SET data=jsonb_set(data,'{accountType}','\"EDUCATOR\"') WHERE collection='users' AND id=%s", (ua,))
+        r = act(atok, "adminBroadcast", {"title": "آزمون", "body": "پیام آزمایشی", "audience": "EDUCATOR"})
+        bd = r.get("data", {})
+        check("S14 adminBroadcast returns counts", r.get("ok") and "sent" in bd and "skipped" in bd, r)
+        sql("UPDATE docs SET data=jsonb_set(data,'{accountType}','\"FAMILY\"') WHERE collection='users' AND id=%s", (ua,))
+    else:
+        check("S14 adminBroadcast returns counts (skipped: real educators exist)", True)
     r = act(atok, "adminIssueReset", {"email": mailD})
     check("S14 adminIssueReset notifies target", r.get("ok") and notes_of(td, "SAFETY_NOTICE"), r)
 
@@ -667,6 +675,12 @@ def cleanup():
         sql("DELETE FROM docs WHERE collection=%s AND data->>'adminId' = ANY(%s)", (coll, uids))
     sql("DELETE FROM docs WHERE collection='reports' AND data->>'reporterId' = ANY(%s)", (uids,))
     sql("DELETE FROM docs WHERE collection='notifications' AND data->>'userId' = ANY(%s)", (uids,))
+    sql("DELETE FROM docs WHERE collection='groups' AND data->>'ownerId' = ANY(%s)", (uids,))
+    sql("DELETE FROM docs WHERE collection='donations' AND data->>'ownerId' = ANY(%s)", (uids,))
+    sql("DELETE FROM docs WHERE collection='resets' AND data->>'uid' = ANY(%s)", (uids,))
+    ms = int(START * 1000)
+    for coll in ("questions", "posts"):
+        sql("DELETE FROM docs WHERE collection=%s AND data->>'authorId'='u_deleted' AND (data->>'createdAt')::bigint >= %s", (coll, ms))
     left = sql("SELECT count(*) FROM docs WHERE collection='users' AND data->>'email' LIKE %s", ("smoke-%s-%%" % RUN,))[0][0]
     print("cleanup: %d smoke users left" % left)
 
