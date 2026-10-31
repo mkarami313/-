@@ -82,6 +82,9 @@ data class ProfessionalProfile(
     val city: String? = null,
     val offersOnline: Boolean = false,
     val experience: String? = null,       // optional free text
+    val photoId: String? = null,          // 32-hex id of an uploaded image
+    val fee: String? = null,              // free text, e.g. «۵۰۰ هزار تومان / جلسه»
+    val hours: String? = null,            // free text, e.g. «شنبه تا چهارشنبه ۱۶ تا ۲۰»
     val verificationStatus: VerificationStatus = VerificationStatus.NONE,
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L,
@@ -100,6 +103,7 @@ data class VerificationRequest(
     val licenseNumber: String? = null,    // private
     val credentialNote: String? = null,   // private
     val documentRefs: List<String> = emptyList(), // admin-only storage references
+    val requestedType: String? = null,    // AccountType name the user asks to be granted
     val status: VerificationStatus = VerificationStatus.PENDING,
     val reviewerNote: String? = null,
     val reviewedByAdminId: String? = null,
@@ -121,6 +125,7 @@ data class ChildProfilePrivate(
     val ageRange: AgeRange = AgeRange.UNSPECIFIED,
     val interests: List<String> = emptyList(),
     val isPublic: Boolean = false,
+    val notes: String? = null,            // private caregiver notes
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L,
 )

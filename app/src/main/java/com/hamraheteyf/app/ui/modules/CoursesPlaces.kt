@@ -119,10 +119,13 @@ fun CourseDetailScreen(courseId: String, onBack: () -> Unit) {
     playing?.let { u ->
         AlertDialog(onDismissRequest = { playing = null }, confirmButton = { TextButton(onClick = { playing = null }) { Text("بستن") } },
             text = {
-                AndroidView(factory = { c -> VideoView(c).apply {
-                    val mc = android.widget.MediaController(c); mc.setAnchorView(this); setMediaController(mc)
-                    setVideoURI(Uri.parse(u)); setOnPreparedListener { start() }
-                } }, modifier = Modifier.fillMaxWidth().height(220.dp))
+                val signed by produceState<String?>(null, u) { value = com.hamraheteyf.app.net.FileUrls.resolveUrl(u) }
+                signed?.let { src ->
+                    AndroidView(factory = { c -> VideoView(c).apply {
+                        val mc = android.widget.MediaController(c); mc.setAnchorView(this); setMediaController(mc)
+                        setVideoURI(Uri.parse(src)); setOnPreparedListener { start() }
+                    } }, modifier = Modifier.fillMaxWidth().height(220.dp))
+                }
             })
     }
     if (editing && client != null && course != null) {

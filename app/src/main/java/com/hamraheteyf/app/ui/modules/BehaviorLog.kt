@@ -51,7 +51,7 @@ fun BehaviorLogScreen(onBack: () -> Unit) {
     var deleting by remember { mutableStateOf<Rec?>(null) }
     val st = rememberRecs(client, "log", tick)
     val visible = remember(st.items, filter) {
-        st.items.orEmpty().filter { filter.isBlank() || it["childId"] == filter }.sortedByDescending { it.sortKey() }
+        st.items.orEmpty().filter { filter.isBlank() || (if (filter == UNASSIGNED_CHILD) it["childId"].isBlank() else it["childId"] == filter) }.sortedByDescending { it.sortKey() }
     }
 
     Scaffold(
@@ -60,7 +60,7 @@ fun BehaviorLogScreen(onBack: () -> Unit) {
     ) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
             InfoBanner("این ثبت‌ها فقط برای خود شماست. با ثبت منظم، الگوی محرک‌ها و خواب را می‌توانید به درمانگر نشان دهید.", Modifier.padding(12.dp, 8.dp), dismissKey = "behaviorlog_private")
-            ChildChipRow(children, filter, { filter = it }, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
+            ChildChipRow(children, filter, { filter = it }, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp), unassignedLabel = "بدون کودک")
             TabRow(selectedTabIndex = tab) {
                 Tab(tab == 0, { tab = 0 }, text = { Text("ثبت‌ها") })
                 Tab(tab == 1, { tab = 1 }, text = { Text("آمار ۳۰ روز") })
@@ -86,7 +86,7 @@ fun BehaviorLogScreen(onBack: () -> Unit) {
         }
     }
     if ((adding || editing != null) && client != null) {
-        LogEditor(client, children, editing, if (editing == null) filter else "", { adding = false; editing = null }) { adding = false; editing = null; tick++ }
+        LogEditor(client, children, editing, if (editing == null && filter != UNASSIGNED_CHILD) filter else "", { adding = false; editing = null }) { adding = false; editing = null; tick++ }
     }
     deleting?.let { d ->
         ConfirmDialog("این ثبت حذف شود؟", onYes = { deleting = null; scope.launch { client?.delete("log", d.id); tick++ } }, onDismiss = { deleting = null })

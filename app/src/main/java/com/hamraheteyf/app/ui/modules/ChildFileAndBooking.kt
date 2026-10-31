@@ -1,5 +1,6 @@
 package com.hamraheteyf.app.ui.modules
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -201,8 +202,11 @@ private fun SlotEditor(client: RecClient, initial: Rec?, onDismiss: () -> Unit, 
         beforeSave = { data ->
             val iso = data.remove("_date").orEmpty(); val time = data.remove("_time").orEmpty()
             val g = Jalali.parseIso(iso) ?: return@RecEditorDialog "تاریخ نوبت را انتخاب کنید."
+            val at = Jalali.epochMs(iso, time) ?: return@RecEditorDialog "ساعت نوبت نامعتبر است."
+            if (at <= System.currentTimeMillis()) return@RecEditorDialog "زمان نوبت باید در آینده باشد."
             val day = Jalali.WEEKDAYS[Jalali.weekdayIndex(g.y, g.m, g.d)]
             data["when"] = "$day ${Jalali.display(iso)} ساعت ${Jalali.displayTime(time)}"
+            data["epochMs"] = at.toString()
             null
         },
     ) { v, _ ->
@@ -217,8 +221,11 @@ private fun SlotEditor(client: RecClient, initial: Rec?, onDismiss: () -> Unit, 
 private fun apptId(slotId: String) = "slot_$slotId"
 
 @Composable
-fun BookingScreen(onBack: () -> Unit) {
+fun BookingScreen(onBack: () -> Unit, onOpenProfile: ((String) -> Unit)? = null) {
     val client = rememberRecClient()
+    val container = com.hamraheteyf.app.di.LocalAppContainer.current
+    val pros by remember { container.userRepository.searchProfessionals(com.hamraheteyf.app.data.repository.ProfessionalFilter()) }.collectAsState(emptyList())
+    val proTitle = remember(pros) { pros.associate { it.user.id to it.profile.title } }
     val ctx = LocalContext.current
     val me = rememberMe()
     val isPro = me != null && (me.isAdmin || me.accountType != AccountType.FAMILY && me.accountType != AccountType.COMMUNITY)
@@ -231,12 +238,22 @@ fun BookingScreen(onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     val titles = listOf("نوبت‌های آزاد", "رزروهای من") + if (isPro) listOf("نوبت‌های من") else emptyList()
     if (tab >= titles.size) tab = 0
-    val st = rememberRecs(client, "slot", tick, mine = tab == 2, booked = tab == 1)
+    val raw = rememberRecs(client, "slot", tick, mine = tab == 2, booked = tab == 1)
+    val st = remember(raw, tab) {
+        val now = System.currentTimeMillis()
+        RecState(
+            raw.items
+                ?.filter { tab != 0 || Reminders.slotAt(it).let { t -> t == null || t > now } }
+                ?.sortedBy { Reminders.slotAt(it) ?: Long.MAX_VALUE },
+            raw.error,
+        )
+    }
+    var cancelling by remember { mutableStateOf<Rec?>(null) }
 
     // Keep local alarms in step with the booked list (a time change by the professional re-arms; unparseable times are skipped).
     LaunchedEffect(st.items, tab) {
         if (tab == 1) st.items?.forEach { r ->
-            Jalali.epochMsFromText(r["when"])?.let { Reminders.scheduleAppointment(ctx, apptId(r.id), "نوبت با ${r.ownerName}: ${r["when"]}", it) }
+            Reminders.slotAt(r)?.let { Reminders.scheduleAppointment(ctx, apptId(r.id), "نوبت با ${r.ownerName}: ${r["when"]}", it) }
         }
     }
 
@@ -245,7 +262,7 @@ fun BookingScreen(onBack: () -> Unit) {
             when (val res = client!!.simple(action, r.id)) {
                 is ApiResult.Fail -> snack.showSnackbar(res.message)
                 is ApiResult.Ok -> when (action) {
-                    "slotBook" -> Jalali.epochMsFromText(r["when"])?.let { Reminders.scheduleAppointment(ctx, apptId(r.id), "نوبت با ${r.ownerName}: ${r["when"]}", it) }
+                    "slotBook" -> Reminders.slotAt(r)?.let { Reminders.scheduleAppointment(ctx, apptId(r.id), "نوبت با ${r.ownerName}: ${r["when"]}", it) }
                     "slotCancel" -> Reminders.cancel(ctx, apptId(r.id))
                 }
             }
@@ -267,7 +284,15 @@ fun BookingScreen(onBack: () -> Unit) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(r["when"], style = MaterialTheme.typography.titleSmall)
-                            if (tab != 2) Text("با ${r.ownerName}", style = MaterialTheme.typography.labelMedium, color = mutedColor())
+                            if (tab != 2) {
+                                val t = proTitle[r.ownerId]
+                                Text(
+                                    "با ${r.ownerName}" + (t?.let { " · $it" } ?: ""),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = if (onOpenProfile != null && r.ownerId.isNotBlank()) MaterialTheme.colorScheme.primary else mutedColor(),
+                                    modifier = if (onOpenProfile != null && r.ownerId.isNotBlank()) Modifier.clickable { onOpenProfile(r.ownerId) } else Modifier,
+                                )
+                            }
                             Text(listOf(r["place"], r["duration"].takeIf { it.isNotBlank() }?.let { "${it.toPersianDigits()} دقیقه" }).filterNotNull().filter { it.isNotBlank() }.joinToString(" · "),
                                 style = MaterialTheme.typography.labelMedium, color = mutedColor())
                             if (r["note"].isNotBlank()) Text(r["note"], style = MaterialTheme.typography.bodySmall, maxLines = 2)
@@ -276,12 +301,12 @@ fun BookingScreen(onBack: () -> Unit) {
                     }
                     Spacer(Modifier.height(6.dp))
                     when (tab) {
-                        0 -> Button(onClick = { act("slotBook", r) }, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)) { Text("رزرو این نوبت") }
-                        1 -> OutlinedButton(onClick = { act("slotCancel", r) }, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)) { Text("لغو رزرو") }
+                        0 -> if (r.mine) CategoryChip("نوبت شما") else Button(onClick = { act("slotBook", r) }, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)) { Text("رزرو این نوبت") }
+                        1 -> OutlinedButton(onClick = { cancelling = r }, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)) { Text("لغو رزرو") }
                         else -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             if (r.status == "BOOKED") {
                                 CategoryChip("رزرو: ${r.bookedByName}", accent = true)
-                                TextButton(onClick = { act("slotCancel", r) }) { Text("لغو رزرو") }
+                                TextButton(onClick = { cancelling = r }) { Text("لغو رزرو") }
                             } else CategoryChip("آزاد")
                         }
                     }
@@ -292,6 +317,14 @@ fun BookingScreen(onBack: () -> Unit) {
     if ((adding || editing != null) && client != null) {
         val close = { adding = false; editing = null }
         SlotEditor(client, editing, close) { close(); tick++ }
+    }
+    cancelling?.let { c ->
+        ConfirmDialog(
+            if (c.mine) "رزرو «${c.bookedByName}» لغو شود؟ نوبت دوباره آزاد می‌شود و به رزروکننده اطلاع داده می‌شود."
+            else "رزرو شما برای این نوبت لغو شود؟ نوبت آزاد می‌شود و به ${c.ownerName} اطلاع داده می‌شود.",
+            confirm = "لغو رزرو",
+            onYes = { cancelling = null; act("slotCancel", c) }, onDismiss = { cancelling = null },
+        )
     }
     deleting?.let { d ->
         ConfirmDialog(if (d.status == "BOOKED") "این نوبت رزرو شده است؛ با حذف، به رزروکننده اطلاع داده می‌شود. ادامه می‌دهید؟" else "این نوبت حذف شود؟",

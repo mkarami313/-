@@ -38,6 +38,7 @@ fun ProfileTabScreen(
     val vm: AccountViewModel = viewModel(factory = appViewModelFactory { AccountViewModel(container.authRepository, container.userRepository) })
     val user by vm.currentUser.collectAsState()
     val professional by vm.professional.collectAsState()
+    val verification by vm.verification.collectAsState()
 
     Scaffold(topBar = { com.hamraheteyf.app.ui.common.ScreenHeader("پروفایل") }) { padding ->
         Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState())) {
@@ -63,20 +64,31 @@ fun ProfileTabScreen(
                     }
                     Spacer(Modifier.height(4.dp))
                     Text(u.accountType.label, style = MaterialTheme.typography.bodyMedium, color = mutedColor())
+                    if (u.accountType == AccountType.COMMUNITY) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "به‌عنوان عضو جامعه می‌توانید در پرسش‌وپاسخ و گروه‌ها مشارکت کنید؛ پروندهٔ کودک و ابزارهای خانواده مخصوص حساب خانواده است.",
+                            style = MaterialTheme.typography.labelMedium, color = mutedColor(),
+                        )
+                    }
                     u.bio?.let { Spacer(Modifier.height(8.dp)); Text(it, style = MaterialTheme.typography.bodyMedium) }
                 }
                 HorizontalDivider()
 
                 Entry("ویرایش پروفایل", onEditProfile)
-                if (u.accountType.canRequestVerification()) {
-                    Entry("پروفایل تخصصی", onProfessional)
-                    val vStatus = professional?.verificationStatus ?: VerificationStatus.NONE
-                    Entry("بررسی تخصص — ${vStatus.label}", onVerification)
+                val isPro = u.accountType.canRequestVerification()
+                if (isPro || verification != null) Entry("پروفایل تخصصی", onProfessional)
+                if (!u.isAdmin) {
+                    val vStatus = verification?.status ?: professional?.verificationStatus ?: VerificationStatus.NONE
+                    Entry(
+                        if (vStatus == VerificationStatus.NONE) "درخواست نشان متخصص (پزشک، مربی، مددکار)" else "بررسی تخصص — ${vStatus.label}",
+                        onVerification,
+                    )
                 }
                 if (u.accountType == AccountType.FAMILY) {
                     Entry("اطلاعات کودک (خصوصی)", onChildren)
                 }
-                Entry("اشتراک‌های دریافتی (پروندهٔ کودکِ دیگران)", onSharesReceived)
+                if (isPro) Entry("اشتراک‌های دریافتی (پروندهٔ کودکِ دیگران)", onSharesReceived)
                 Entry("تنظیمات و حریم خصوصی", onSettings)
                 if (u.isAdmin) Entry("پنل مدیریت", onAdmin)
                 HorizontalDivider()

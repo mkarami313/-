@@ -7,6 +7,7 @@ import android.widget.Toast
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -111,6 +112,11 @@ fun AdminModulesTab(onMessage: (String) -> Unit) {
     }
 }
 
+private val StatusLabels = mapOf("ACTIVE" to "فعال", "LIMITED" to "محدود", "BLOCKED" to "مسدود", "PENDING_REVIEW" to "در انتظار بررسی", "DELETED" to "حذف‌شده")
+private val DonationLabels = mapOf("AVAILABLE" to "آزاد", "RESERVED" to "رزروشده", "DONE" to "تحویل‌شده", "REMOVED" to "حذف‌شده", "CLOSED" to "بسته")
+
+private fun JsonElement?.asLong(): Long = (this as? JsonPrimitive)?.longOrNull ?: 0L
+
 @Composable
 fun AdminStatsTab() {
     val call = rememberPlatformCall()
@@ -130,16 +136,37 @@ fun AdminStatsTab() {
         val d = data
         if (d == null && err == null) LoadingState()
         if (d != null) {
-            StatRow("کاربران", d.n("users")); StatRow("فعال در ۷ روز اخیر", d.n("activeLast7d"))
-            StatRow("گزارش‌های باز", d.n("openReports")); StatRow("درخواست‌های تأیید تخصص", d.n("pendingVerifications"))
-            d["byType"]?.jsonObject?.let { bt ->
+            val u = d["users"] as? JsonObject
+            val mod = d["moderation"] as? JsonObject
+            Text("کاربران", style = MaterialTheme.typography.titleSmall)
+            StatRow("همهٔ کاربران", u?.n("total") ?: 0)
+            StatRow("جدید در ۷ روز اخیر", u?.n("new7d") ?: 0)
+            StatRow("جدید در ۳۰ روز اخیر", u?.n("new30d") ?: 0)
+            StatRow("فعال در ۷ روز اخیر", u?.n("active7d") ?: 0)
+            StatRow("فعال در ۳۰ روز اخیر", u?.n("active30d") ?: 0)
+            Text("نیازمند بررسی", style = MaterialTheme.typography.titleSmall)
+            StatRow("گزارش‌های باز", mod?.n("openReports") ?: 0)
+            StatRow("درخواست‌های تأیید تخصص", mod?.n("pendingVerifications") ?: 0)
+            (u?.get("byType") as? JsonObject)?.let { bt ->
                 Text("به تفکیک نقش", style = MaterialTheme.typography.titleSmall)
-                bt.forEach { (k, v) -> StatRow(RoleLabels.firstOrNull { it.first == k }?.second ?: k, v.jsonPrimitive.longOrNull ?: 0) }
+                bt.forEach { (k, v) -> StatRow(RoleLabels.firstOrNull { it.first == k }?.second ?: k, v.asLong()) }
             }
-            d["content"]?.jsonObject?.let { c ->
+            (u?.get("byStatus") as? JsonObject)?.let { bs ->
+                Text("به تفکیک وضعیت حساب", style = MaterialTheme.typography.titleSmall)
+                bs.forEach { (k, v) -> StatRow(StatusLabels[k] ?: k, v.asLong()) }
+            }
+            (d["content"] as? JsonObject)?.let { c ->
                 Text("محتوا", style = MaterialTheme.typography.titleSmall)
-                val names = mapOf("questions" to "پرسش‌ها", "answers" to "پاسخ‌ها", "posts" to "پست‌های گروه", "guides" to "راهنماها", "donations" to "آگهی‌های دست‌به‌دست")
-                c.forEach { (k, v) -> StatRow(names[k] ?: k, v.jsonPrimitive.longOrNull ?: 0) }
+                val names = linkedMapOf(
+                    "questions" to "پرسش‌ها", "answers" to "پاسخ‌ها", "groups" to "گروه‌ها", "posts" to "پست‌های گروه",
+                    "guides" to "راهنماها", "children" to "پروندهٔ کودک", "conversations" to "گفتگوها",
+                )
+                names.forEach { (k, label) -> if (c.containsKey(k)) StatRow(label, c[k].asLong()) }
+                val don = c["donations"]
+                if (don is JsonObject) {
+                    StatRow("آگهی‌های دست‌به‌دست (کل)", don.values.sumOf { it.asLong() })
+                    don.forEach { (k, v) -> StatRow("   ${DonationLabels[k] ?: k}", v.asLong()) }
+                } else if (don != null) StatRow("آگهی‌های دست‌به‌دست", don.asLong())
             }
             OutlinedButton(onClick = { tick++ }) { Text("تازه‌سازی") }
         }
@@ -156,6 +183,8 @@ private fun StatRow(label: String, value: Long) {
     }
 }
 
+private const val USERS_PAGE = 30
+
 @Composable
 fun AdminUsersTab(onMessage: (String) -> Unit) {
     val call = rememberPlatformCall()
@@ -163,28 +192,51 @@ fun AdminUsersTab(onMessage: (String) -> Unit) {
     val scope = rememberCoroutineScope()
     var q by rememberSaveable { mutableStateOf("") }
     var query by rememberSaveable { mutableStateOf("") }
+    var statusFilter by rememberSaveable { mutableStateOf("") }
+    var typeFilter by rememberSaveable { mutableStateOf("") }
     var tick by remember { mutableIntStateOf(0) }
     var users by remember { mutableStateOf<List<JsonObject>?>(null) }
     var total by remember { mutableLongStateOf(0) }
+    var loadingMore by remember { mutableStateOf(false) }
     var err by remember { mutableStateOf<String?>(null) }
     var statusFor by remember { mutableStateOf<Pair<JsonObject, AccountStatus>?>(null) }
     var statusReason by remember { mutableStateOf("") }
+    var typeFor by remember { mutableStateOf<JsonObject?>(null) }
     var resetFor by remember { mutableStateOf<JsonObject?>(null) }
     var resetCode by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(call, query, tick) {
+    val args = { offset: Int ->
+        buildJsonObject {
+            put("q", query); put("limit", USERS_PAGE); put("offset", offset)
+            if (statusFilter.isNotEmpty()) put("status", statusFilter)
+            if (typeFilter.isNotEmpty()) put("accountType", typeFilter)
+        }
+    }
+    LaunchedEffect(call, query, statusFilter, typeFilter, tick) {
         err = null
-        when (val r = call?.call("adminListUsers", buildJsonObject { put("q", query); put("limit", 50); put("offset", 0) })) {
-            is ApiResult.Ok -> { users = r.data["users"]?.jsonArray?.map { it.jsonObject }.orEmpty(); total = r.data.n("total") }
+        users = null
+        when (val r = call?.call("adminListUsers", args(0))) {
+            is ApiResult.Ok -> { users = r.data["items"]?.jsonArray?.map { it.jsonObject }.orEmpty(); total = r.data.n("total") }
             is ApiResult.Fail -> err = r.message
             null -> err = "در حالت آفلاین در دسترس نیست."
         }
     }
+    fun typeLabel(id: String) = RoleLabels.firstOrNull { it.first == id }?.second ?: id
     Column(Modifier.fillMaxSize()) {
         OutlinedTextField(
             q, { q = it }, label = { Text("جستجوی نام یا ایمیل") }, singleLine = true,
             trailingIcon = { TextButton(onClick = { query = q.trim() }) { Text("جستجو") } },
-            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
         )
+        Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FilterChip(statusFilter.isEmpty(), { statusFilter = "" }, label = { Text("همهٔ وضعیت‌ها") })
+            listOf(AccountStatus.ACTIVE, AccountStatus.LIMITED, AccountStatus.BLOCKED).forEach { s ->
+                FilterChip(statusFilter == s.name, { statusFilter = s.name }, label = { Text(s.label) })
+            }
+        }
+        Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FilterChip(typeFilter.isEmpty(), { typeFilter = "" }, label = { Text("همهٔ نقش‌ها") })
+            RoleLabels.forEach { (id, label) -> FilterChip(typeFilter == id, { typeFilter = id }, label = { Text(label) }) }
+        }
         err?.let { ErrorState(it, onRetry = { tick++ }) }
         val list = users
         if (list == null && err == null) LoadingState()
@@ -193,27 +245,50 @@ fun AdminUsersTab(onMessage: (String) -> Unit) {
             if (list.isEmpty()) item { EmptyState("کاربری پیدا نشد.") }
             items(list, key = { it.s("id") }) { u ->
                 val st = runCatching { AccountStatus.valueOf(u.s("status")) }.getOrDefault(AccountStatus.ACTIVE)
+                val isAdmin = (u["isAdmin"] as? JsonPrimitive)?.booleanOrNull == true
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(12.dp)) {
-                        Text(u.s("name").ifBlank { "بدون نام" }, style = MaterialTheme.typography.titleSmall)
+                        Text(u.s("displayName").ifBlank { "بدون نام" } + if (isAdmin) " (مدیر)" else "", style = MaterialTheme.typography.titleSmall)
                         Text(u.s("email"), style = MaterialTheme.typography.bodySmall, color = mutedColor())
-                        Text("وضعیت: ${st.label}", style = MaterialTheme.typography.labelMedium)
+                        Text("نقش: ${typeLabel(u.s("accountType"))} · وضعیت: ${st.label}", style = MaterialTheme.typography.labelMedium)
                         @OptIn(ExperimentalLayoutApi::class)
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             if (st != AccountStatus.ACTIVE) OutlinedButton(onClick = { statusFor = u to AccountStatus.ACTIVE }) { Text("فعال‌سازی") }
                             if (st != AccountStatus.LIMITED) OutlinedButton(onClick = { statusFor = u to AccountStatus.LIMITED }) { Text("محدودسازی") }
                             if (st != AccountStatus.BLOCKED) OutlinedButton(onClick = { statusFor = u to AccountStatus.BLOCKED }) { Text("مسدودسازی") }
+                            if (!isAdmin) OutlinedButton(onClick = { typeFor = u }) { Text("تغییر نقش") }
                             OutlinedButton(onClick = { resetFor = u }) { Text("صدور کد بازیابی") }
                         }
                     }
                 }
+            }
+            if (list.size < total) item {
+                OutlinedButton(
+                    enabled = !loadingMore, modifier = Modifier.fillMaxWidth(),
+                    onClick = {
+                        loadingMore = true
+                        scope.launch {
+                            when (val r = call?.call("adminListUsers", args(list.size))) {
+                                is ApiResult.Ok -> {
+                                    val more = r.data["items"]?.jsonArray?.map { it.jsonObject }.orEmpty()
+                                    val seen = list.map { it.s("id") }.toSet()
+                                    users = list + more.filter { it.s("id") !in seen }
+                                    total = r.data.n("total")
+                                }
+                                is ApiResult.Fail -> onMessage(r.message)
+                                null -> {}
+                            }
+                            loadingMore = false
+                        }
+                    },
+                ) { Text(if (loadingMore) "در حال بارگذاری…" else "نمایش بیشتر (${(total - list.size).toInt().toPersianDigits()} مورد دیگر)") }
             }
         }
     }
     statusFor?.let { (u, target) ->
         AlertDialog(
             onDismissRequest = { statusFor = null; statusReason = "" },
-            title = { Text("«${target.label}» برای ${u.s("name")}؟") },
+            title = { Text("«${target.label}» برای ${u.s("displayName")}؟") },
             text = { OutlinedTextField(statusReason, { statusReason = it }, label = { Text("دلیل تصمیم (الزامی)") }, modifier = Modifier.fillMaxWidth()) },
             confirmButton = {
                 TextButton(enabled = statusReason.isNotBlank(), onClick = {
@@ -227,6 +302,36 @@ fun AdminUsersTab(onMessage: (String) -> Unit) {
             },
             dismissButton = { TextButton(onClick = { statusFor = null; statusReason = "" }) { Text("انصراف") } },
         )
+    }
+    typeFor?.let { u ->
+        var pick by remember(u) { mutableStateOf(u.s("accountType")) }
+        var typeReason by remember(u) { mutableStateOf("") }
+        var confirming by remember(u) { mutableStateOf(false) }
+        if (!confirming) AlertDialog(
+            onDismissRequest = { typeFor = null },
+            title = { Text("تغییر نقش ${u.s("displayName")}") },
+            text = {
+                Column {
+                    Text("نقش فعلی: ${typeLabel(u.s("accountType"))}. کاهش نقش متخصص به «خانواده» نشان تأیید او را برمی‌دارد و به او اطلاع داده می‌شود.", style = MaterialTheme.typography.bodySmall)
+                    RoleLabels.forEach { (id, label) ->
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(pick == id, { pick = id })
+                            Text(label)
+                        }
+                    }
+                    OutlinedTextField(typeReason, { typeReason = it.take(500) }, label = { Text("دلیل تغییر (الزامی)") }, modifier = Modifier.fillMaxWidth())
+                }
+            },
+            confirmButton = { TextButton(enabled = pick != u.s("accountType") && typeReason.isNotBlank(), onClick = { confirming = true }) { Text("ادامه") } },
+            dismissButton = { TextButton(onClick = { typeFor = null }) { Text("انصراف") } },
+        ) else ConfirmDialog("نقش «${u.s("displayName")}» از «${typeLabel(u.s("accountType"))}» به «${typeLabel(pick)}» تغییر کند؟", confirm = "تغییر نقش", onYes = {
+            typeFor = null
+            scope.launch {
+                val r = call?.call("adminSetAccountType", buildJsonObject { put("userId", u.s("id")); put("accountType", pick); put("reason", typeReason.trim()) })
+                onMessage(if (r is ApiResult.Fail) r.message else "نقش کاربر تغییر کرد.")
+                tick++
+            }
+        }, onDismiss = { typeFor = null })
     }
     resetFor?.let { u ->
         ConfirmDialog("برای ${u.s("email")} کد بازیابی رمز صادر شود؟ (۸ رقم، ۳۰ دقیقه، یک‌بار مصرف؛ در گزارش تغییرات ثبت می‌شود)", confirm = "صدور کد", onYes = {

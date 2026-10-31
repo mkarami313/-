@@ -1,6 +1,8 @@
 package com.hamraheteyf.app.ui.directory
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -33,7 +35,11 @@ class DirectoryViewModel(private val userRepo: UserRepository) : ViewModel() {
     fun setQuery(q: String) { filter.value = filter.value.copy(query = q) }
     fun setCity(c: String) { filter.value = filter.value.copy(city = c.ifBlank { null }) }
     fun setOnlineOnly(v: Boolean) { filter.value = filter.value.copy(onlineOnly = v) }
-    fun setVerifiedOnly(v: Boolean) { filter.value = filter.value.copy(verifiedOnly = v) }
+    fun setSpecialty(sp: String?) { filter.value = filter.value.copy(specialty = sp) }
+
+    val specialties: StateFlow<List<String>> = userRepo.searchProfessionals(ProfessionalFilter())
+        .map { l -> l.flatMap { it.profile.workAreas }.map { it.trim() }.filter { it.isNotEmpty() }.groupingBy { it }.eachCount().entries.sortedByDescending { it.value }.map { it.key }.take(12) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -43,6 +49,7 @@ fun DirectoryScreen(onBack: () -> Unit, onOpenProfile: (String) -> Unit) {
     val vm: DirectoryViewModel = viewModel(factory = appViewModelFactory { DirectoryViewModel(container.userRepository) })
     val results by vm.results.collectAsState()
     val filter by vm.filter.collectAsState()
+    val specialties by vm.specialties.collectAsState()
 
     Scaffold(
         topBar = {
@@ -55,10 +62,16 @@ fun DirectoryScreen(onBack: () -> Unit, onOpenProfile: (String) -> Unit) {
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(value = filter.city ?: "", onValueChange = { vm.setCity(it) }, label = { Text("شهر") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 Spacer(Modifier.height(8.dp))
-                Row {
+                Row(Modifier.horizontalScroll(rememberScrollState())) {
                     FilterChip(selected = filter.onlineOnly, onClick = { vm.setOnlineOnly(!filter.onlineOnly) }, label = { Text("پاسخ‌گویی آنلاین") }, modifier = Modifier.padding(end = 8.dp))
-                    FilterChip(selected = filter.verifiedOnly, onClick = { vm.setVerifiedOnly(!filter.verifiedOnly) }, label = { Text("فقط تأییدشده") })
+                    specialties.forEach { sp ->
+                        FilterChip(
+                            selected = filter.specialty == sp, onClick = { vm.setSpecialty(if (filter.specialty == sp) null else sp) },
+                            label = { Text(sp) }, modifier = Modifier.padding(end = 8.dp),
+                        )
+                    }
                 }
+                Text("فقط متخصصان تأییدشده در این فهرست دیده می‌شوند.", style = MaterialTheme.typography.labelMedium, color = mutedColor())
             }
             InfoBanner("اطلاعات این فهرست جایگزین مشاورهٔ پزشکی یا درمانی نیست. پیش از هر تصمیم درمانی با متخصص حضوری مشورت کنید.", Modifier.padding(horizontal = 16.dp), dismissKey = "directory_medical_notice")
             Spacer(Modifier.height(8.dp))

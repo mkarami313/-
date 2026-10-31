@@ -18,12 +18,13 @@ data class ConversationState(
     val otherVerifiedProfessional: Boolean = false,
     val isInitiator: Boolean = false,
     val isMuted: Boolean = false,
+    val otherBlocked: Boolean = false,
 )
 
 class ConversationViewModel(
     private val conversationId: String,
     private val convRepo: ConversationRepository,
-    userRepo: UserRepository,
+    private val userRepo: UserRepository,
     private val reportRepo: ReportRepository,
 ) : ViewModel() {
 
@@ -35,8 +36,9 @@ class ConversationViewModel(
         convRepo.observeMessages(conversationId),
         userRepo.observeUsers(),
         userRepo.observeAllProfessionals(),
-        userRepo.observeCurrentUser().map { it?.id },
-    ) { conv, messages, users, professionals, meId ->
+        userRepo.observeCurrentUser(),
+    ) { conv, messages, users, professionals, me ->
+        val meId = me?.id
         if (conv == null) return@combine ConversationState(currentUserId = meId)
         val otherId = conv.participantIds.firstOrNull { it != meId }
         val other = users.find { it.id == otherId }
@@ -51,6 +53,7 @@ class ConversationViewModel(
             otherVerifiedProfessional = prof?.verificationStatus == VerificationStatus.VERIFIED,
             isInitiator = conv.initiatorId == meId,
             isMuted = meId != null && meId in conv.mutedByUserIds,
+            otherBlocked = otherId != null && me != null && otherId in me.blockedUserIds,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ConversationState())
 
@@ -66,6 +69,14 @@ class ConversationViewModel(
     fun end() = run("گفتگو پایان یافت.") { convRepo.endConversation(conversationId) }
     fun toggleMute() = run { convRepo.toggleMute(conversationId) }
     fun send(body: String) = run { convRepo.sendMessage(conversationId, body) }
+    fun blockOther() {
+        val otherId = state.value.otherUserId ?: return
+        run("کاربر مسدود شد.") { userRepo.blockUser(otherId) }
+    }
+    fun unblockOther() {
+        val otherId = state.value.otherUserId ?: return
+        run("مسدودیت کاربر برداشته شد.") { userRepo.unblockUser(otherId) }
+    }
     fun report(reason: ReportReason, note: String) {
         val otherId = state.value.otherUserId ?: return
         run("گزارش ثبت شد.") { reportRepo.createReport(ContentType.USER, otherId, reason, note) }

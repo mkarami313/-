@@ -250,6 +250,7 @@ def main():
 
     # ---- privacy ------------------------------------------------------------------------------------------
     act(ta, "updatePrivacy", {"settings": {"showCity": False, "showBio": False, "allowMessageRequests": True, "evil": True}})
+    act(ta, "createQuestion", {"title": "پرسش عمومی", "body": "متن پرسش", "category": "EDUCATION"})  # authors of visible content are in everyone's users list
     users = jhttp("GET", "/api/state", token=tb)[1]["state"]["users"]
     ua_pub = next(u for u in users if u["id"] == ua)
     check("showCity=false hides city", ua_pub.get("city") is None, ua_pub)
@@ -336,6 +337,8 @@ def main():
     c2, b2, _ = http("GET", "/api/tts?text=" + urllib.request.quote("سلام دنیا"), token=ta)
     check("tts GET (old clients) cached", c2 == 200 and b2 == b)
 
+    v14_tests(atok, auid, ta, ua, tb, ub)
+
     # ---- orphan sweeper (scoped to our own test uid) ------------------------------------------------------------------------------
     code, o = upload(ta)
     orph = o["file"]["id"]
@@ -347,6 +350,11 @@ def main():
     # ---- delete-account wipe -------------------------------------------------------------------------------------------------------------
     act(ta, "shareCreate", {"childId": cid, "kinds": ["log"]})
     r = act(ta, "deleteAccount")
+    check("deleteAccount without password rejected (breaking for <0.14 clients)", r.get("ok") is False, r)
+    r = act(ta, "deleteAccount", {"password": "wrong-" + RUN})
+    check("deleteAccount wrong password rejected", r.get("ok") is False, r)
+    check("account survives rejected deletes", http("GET", "/api/state", token=ta)[0] == 200)
+    r = act(ta, "deleteAccount", {"password": "pw-" + RUN + "-123"})
     check("deleteAccount", r.get("ok"), r)
     check("wipe: file bytes gone", http("GET", "/api/files/" + fid)[0] == 404)
     left = sql("SELECT count(*) FROM docs WHERE data->>'ownerId'=%s OR data->>'familyUserId'=%s OR data->>'userId'=%s", (ua, ua, ua))[0][0]
@@ -355,12 +363,303 @@ def main():
     check("wipe: token dead", http("GET", "/api/state", token=ta)[0] == 401)
 
 
+def state_of(tok):
+    return jhttp("GET", "/api/state", token=tok)[1].get("state", {})
+
+
+def notes_of(tok, ntype=None):
+    return [n for n in state_of(tok).get("notifications", []) if ntype is None or n.get("type") == ntype]
+
+
+def v14_tests(atok, auid, ta, ua, tb, ub):
+    """Server v14 items S1..S25. Uses its own throwaway users so earlier flows are not disturbed."""
+    pw = "pw-" + RUN + "-123"
+    mailC, tc, uc, _ = register("c")
+    mailD, td, ud, _ = register("d")
+
+    # S1 profile photo
+    code, up = upload(tc)
+    pid = up["file"]["id"]
+    check("S1 upload returns signedUrl", "?exp=" in up["file"].get("signedUrl", up.get("signedUrl", "")) or "exp=" in json.dumps(up), up)
+    r = act(tc, "updateProfile", {"displayName": "C", "photoId": pid})
+    me = next(u for u in r["state"]["users"] if u["id"] == uc)
+    check("S1 photoId sets photoUrl", me.get("photoUrl") == "files/" + pid, me)
+    r = act(tc, "updateProfile", {"displayName": "C2", "bio": "x" * 700})
+    me = next(u for u in r["state"]["users"] if u["id"] == uc)
+    check("S1 photo kept when photoId absent", me.get("photoUrl") == "files/" + pid, me)
+    check("S1 bio truncated to 600", len(me.get("bio") or "") == 600, len(me.get("bio") or ""))
+    foreign = upload(td)[1]["file"]["id"]
+    check("S1 foreign photo rejected", act(tc, "updateProfile", {"displayName": "C", "photoId": foreign}).get("ok") is False)
+    r = act(tc, "updateProfile", {"displayName": "C", "photoId": ""})
+    me = next(u for u in r["state"]["users"] if u["id"] == uc)
+    check("S1 photoId '' removes photo + file", not me.get("photoUrl") and http("GET", "/api/files/" + pid, token=tc)[0] == 404, me)
+
+    # S2/S3 professional profile + verification
+    check("S2 upsert before verification denied", act(tc, "upsertProfessionalProfile", {"title": "روان‌شناس"}).get("ok") is False)
+    doc = upload(tc)[1]["file"]["id"]
+    check("S3 foreign documentRefs rejected", act(tc, "submitVerificationRequest", {"professionalTitle": "t", "documentRefs": [foreign]}).get("ok") is False)
+    check("S3 bad requestedType rejected", act(tc, "submitVerificationRequest", {"professionalTitle": "t", "requestedType": "FAMILY"}).get("ok") is False)
+    r = act(tc, "submitVerificationRequest", {"professionalTitle": "روان‌شناس", "licenseNumber": "123", "documentRefs": [doc]})
+    check("S3 submitVerificationRequest", r.get("ok"), r)
+    check("S3 admin cannot request", act(atok, "submitVerificationRequest", {"professionalTitle": "x"}).get("ok") is False)
+    rq = next(v for v in state_of(tc)["verifications"] if v["userId"] == uc)
+    check("S3 pro doc created as PENDING", any(p["userId"] == uc and p["verificationStatus"] == "PENDING" for p in state_of(tc)["professionals"]))
+    fr = act(atok, "fileUrls", {"ids": [doc]})
+    check("S25 admin gets signed url for any documentRef", doc in fr.get("data", {}).get("urls", {}), fr)
+    check("S25 other user cannot", doc not in act(td, "fileUrls", {"ids": [doc]}).get("data", {}).get("urls", {}))
+    check("S3 review needs valid decision", act(atok, "reviewVerification", {"requestId": rq["id"], "decision": "MAYBE", "reason": "r"}).get("ok") is False)
+    r = act(atok, "reviewVerification", {"requestId": rq["id"], "decision": "VERIFIED", "reason": "مدارک تأیید شد"})
+    check("S3 review VERIFIED", r.get("ok"), r)
+    check("S3 verified user notified", any(n.get("type") == "VERIFICATION_RESULT" for n in notes_of(tc)))
+    check("S3 accountType PROFESSIONAL after verify", next(u for u in state_of(tc)["users"] if u["id"] == uc)["accountType"] == "PROFESSIONAL")
+
+    # S21 professional profile photo/fee/hours + S22 sweeper
+    ppid = upload(tc)[1]["file"]["id"]
+    base = {"title": "روان‌شناس کودک", "workAreas": ["اوتیسم"], "city": "تهران", "offersOnline": True, "experience": "۵ سال"}
+    r = act(tc, "upsertProfessionalProfile", dict(base, photoId=ppid, fee="۲۰۰ هزار تومان", hours="شنبه تا چهارشنبه ۹ تا ۱۷"))
+    check("S21 upsert pro profile", r.get("ok"), r)
+    pr = next(p for p in r["state"]["professionals"] if p["userId"] == uc)
+    check("S21 photoId/fee/hours stored + returned", pr.get("photoId") == ppid and pr.get("fee") == "۲۰۰ هزار تومان" and pr.get("hours", "").startswith("شنبه"), pr)
+    check("S21 fee > 80 rejected", act(tc, "upsertProfessionalProfile", dict(base, fee="x" * 81)).get("ok") is False)
+    check("S21 hours > 120 rejected", act(tc, "upsertProfessionalProfile", dict(base, hours="x" * 121)).get("ok") is False)
+    check("S21 foreign photoId rejected", act(tc, "upsertProfessionalProfile", dict(base, photoId=foreign)).get("ok") is False)
+    check("S21 non-image photoId rejected", act(tc, "upsertProfessionalProfile", dict(base, photoId="z" * 32)).get("ok") is False)
+    r = act(tc, "upsertProfessionalProfile", base)
+    pr = next(p for p in r["state"]["professionals"] if p["userId"] == uc)
+    check("S21 absent photoId/fee/hours keep stored values", pr.get("photoId") == ppid and pr.get("fee") and pr.get("hours"), pr)
+    fr = act(td, "fileUrls", {"ids": [ppid]})
+    check("S21 family sees pro photo via fileUrls", ppid in fr.get("data", {}).get("urls", {}), fr)
+    n = H.sweep_orphans(0, owner=uc)
+    gone = [f for f in (doc, ppid) if http("GET", "/api/files/" + f, token=atok)[0] != 200]
+    check("S22 sweeper keeps documentRefs + pro photoId", not gone, (n, gone))
+    ufid = upload(tc)[1]["file"]["id"]
+    act(tc, "updateProfile", {"displayName": "C", "photoId": ufid})
+    H.sweep_orphans(0, owner=uc)
+    check("S22 sweeper keeps users.photoId", http("GET", "/api/files/" + ufid, token=tc)[0] == 200)
+
+    # S4 changePassword
+    check("S4 wrong current rejected", act(tc, "changePassword", {"current": "nope", "new": "newer-" + RUN}).get("ok") is False)
+    check("S4 short new rejected", act(tc, "changePassword", {"current": pw, "new": "123"}).get("ok") is False)
+    check("S4 same password rejected", act(tc, "changePassword", {"current": pw, "new": pw}).get("ok") is False)
+    old = tc
+    time.sleep(1.1)
+    r = act(tc, "changePassword", {"current": pw, "new": "newer-" + RUN})
+    check("S4 changePassword returns token", r.get("ok") and r.get("data", {}).get("token"), r)
+    tc = r["data"]["token"]
+    made[:] = [(tc if u == uc else t, u) for t, u in made]
+    check("S4 old token dead / new token works", http("GET", "/api/state", token=old)[0] == 401 and http("GET", "/api/state", token=tc)[0] == 200)
+    c, j, _ = jhttp("POST", "/api/auth/login", {"email": mailC, "password": "newer-" + RUN})
+    check("S4 login with new password", c == 200 and j.get("token"))
+
+    # S5 children
+    r = act(td, "addChild", {"nickname": "نیما", "ageRange": "AGE_3_5", "notes": "یادداشت", "interests": ["نقاشی"]})
+    kid = next(c for c in r["state"]["children"] if c["nickname"] == "نیما")
+    check("S5 addChild notes stored", kid.get("notes") == "یادداشت", kid)
+    r = act(td, "updateChild", {"id": kid["id"], "fields": {"nickname": "نیما۲", "notes": "n2"}})
+    kid = next(c for c in r["state"]["children"] if c["id"] == kid["id"])
+    check("S5 updateChild", kid["nickname"] == "نیما۲" and kid["notes"] == "n2", kid)
+    check("S5 updateChild foreign denied", act(tc, "updateChild", {"id": kid["id"], "fields": {"nickname": "x"}}).get("ok") is False)
+    act(td, "recSave", {"kind": "diary", "data": {"childId": kid["id"], "note": "ثبت", "date": "2026-10-30"}})
+    sh = act(td, "shareCreate", {"childId": kid["id"], "kinds": ["diary"]})
+    check("S5 deleteChild without confirm rejected (breaking for <0.14)", act(td, "deleteChild", {"childId": kid["id"]}).get("ok") is False)
+    check("S5 child still there", any(c["id"] == kid["id"] for c in state_of(td)["children"]))
+    r = act(td, "deleteChild", {"childId": kid["id"], "confirm": True})
+    check("S5 deleteChild confirm ok", r.get("ok") and not any(c["id"] == kid["id"] for c in r["state"]["children"]), r)
+    left = sql("SELECT count(*) FROM docs WHERE data->>'childId'=%s", (kid["id"],))[0][0]
+    check("S5 deleteChild cascades records + shares", left == 0, left)
+
+    # S6 exportMyData
+    r = act(td, "exportMyData")
+    d = r.get("data", {})
+    ex = json.loads(d["json"]) if d.get("json") else {}
+    check("S6 exportMyData shape", r.get("ok") and d.get("filename") and d.get("text") and "profile" in ex and "children" in ex, list(d))
+    check("S6 export has no secrets", "codeHash" not in d.get("json", "") and "tokensValidAfter" not in d.get("json", ""))
+
+    # S7 shares: recipient revoke keeps owner's record (S23)
+    r = act(td, "addChild", {"nickname": "سارا", "ageRange": "AGE_3_5"})
+    kid2 = next(c for c in r["state"]["children"] if c["nickname"] == "سارا")["id"]
+    act(td, "recSave", {"kind": "diary", "data": {"childId": kid2, "note": "x", "date": "2026-10-30"}})
+    s1 = act(td, "shareCreate", {"childId": kid2, "kinds": ["diary"]})
+    code1 = s1["data"]["code"]
+    check("S23 redeem", act(tc, "shareRedeem", {"code": code1}).get("ok"))
+    check("S23 stranger cannot revoke", act(tb, "shareRevoke", {"id": s1["data"]["id"]}).get("ok") is False)
+    r = act(tc, "shareRevoke", {"id": s1["data"]["id"]})
+    check("S23 recipient revoke ok", r.get("ok"), r)
+    lst = act(td, "shareList").get("data", {})
+    mine = [s for s in lst.get("owned", []) if s["id"] == s1["data"]["id"]]
+    check("S23 owner's record survives recipient revoke (REVOKED)", mine and mine[0]["status"] == "REVOKED", lst)
+    check("S23 recipient lost access", not act(tc, "shareList").get("data", {}).get("received"))
+    check("S23 revoked code unusable", act(tb, "shareRedeem", {"code": code1}).get("ok") is False)
+    check("S23 owner revoke still deletes", act(td, "shareRevoke", {"id": s1["data"]["id"]}).get("ok")
+          and not [s for s in act(td, "shareList")["data"]["owned"] if s["id"] == s1["data"]["id"]])
+
+    # S8 groups + notifications
+    gid = act(td, "createGroup", {"title": "گروه آزمون"})["data"]["id"]
+    act(tc, "joinOrRequest", {"groupId": gid})
+    act(td, "removeMember", {"groupId": gid, "userId": uc})
+    check("S8 removeMember notifies", notes_of(tc, "SAFETY_NOTICE") or notes_of(tc, "GROUP_JOIN_REQUEST"))
+    gid2 = act(td, "createGroup", {"title": "گروه خصوصی", "visibility": "PRIVATE"})["data"]["id"]
+    act(tc, "joinOrRequest", {"groupId": gid2})
+    act(td, "approveMember", {"groupId": gid2, "userId": uc})
+    check("S8 approveMember notifies requester", any("پذیرفته" in (n.get("body") or n.get("message") or "") for n in notes_of(tc, "GROUP_JOIN_REQUEST")), notes_of(tc))
+    pr1 = act(td, "createPost", {"groupId": gid2, "body": "پست نخست"})
+    posts = [p for p in pr1["state"]["posts"] if p["groupId"] == gid2]
+    act(tc, "createPost", {"groupId": gid2, "body": "پاسخ", "replyToPostId": posts[0]["id"]})
+    check("S8 reply stored + parent author notified", any(p.get("replyToPostId") == posts[0]["id"] for p in state_of(tc)["posts"]) and notes_of(td, "GROUP_REPLY"))
+
+    # S9 reports
+    check("S9 report unknown content rejected", act(tc, "createReport", {"contentType": "GROUP_POST", "contentId": "gp_nope"}).get("ok") is False)
+    check("S9 self report rejected", act(tc, "createReport", {"contentType": "USER", "contentId": uc}).get("ok") is False)
+    r1 = act(tc, "createReport", {"contentType": "GROUP_POST", "contentId": posts[0]["id"], "reason": "spam"})
+    r2 = act(tc, "createReport", {"contentType": "GROUP_POST", "contentId": posts[0]["id"], "reason": "spam"})
+    check("S9 duplicate report flagged", r1.get("ok") and r2.get("data", {}).get("duplicate") is True, (r1.get("data"), r2.get("data")))
+    rep = next(x for x in state_of(atok)["reports"] if x["contentId"] == posts[0]["id"])
+    r = act(atok, "resolveReport", {"reportId": rep["id"], "newStatus": "ACTIONED", "resolutionNote": "n", "hideContent": True})
+    hst = sql("SELECT data->>'status' FROM docs WHERE collection='posts' AND id=%s", (posts[0]["id"],))
+    check("S9 resolveReport hideContent hides", r.get("ok") and hst and hst[0][0] == "HIDDEN"
+          and all(x["id"] != posts[0]["id"] for x in state_of(td)["posts"]), (r, hst))
+
+    # S10 admin audit log + account type + status
+    check("S10 non-admin has no auditLog", "auditLog" not in state_of(tc) or not state_of(tc)["auditLog"])
+    check("S24 adminSetAccountType requires reason", act(atok, "adminSetAccountType", {"userId": ud, "accountType": "EDUCATOR"}).get("ok") is False)
+    check("S10 adminSetAccountType invalid type", act(atok, "adminSetAccountType", {"userId": ud, "accountType": "KING", "reason": "r"}).get("ok") is False)
+    check("S10 adminSetAccountType non-admin denied", act(tc, "adminSetAccountType", {"userId": ud, "accountType": "EDUCATOR", "reason": "r"}).get("ok") is False)
+    r = act(atok, "adminSetAccountType", {"userId": ud, "accountType": "EDUCATOR", "reason": "سابقهٔ آموزشی"})
+    check("S24 adminSetAccountType ok", r.get("ok"), r)
+    check("S10 account type changed + user notified", next(u for u in state_of(td)["users"] if u["id"] == ud)["accountType"] == "EDUCATOR" and notes_of(td, "VERIFICATION_RESULT"))
+    check("S10 audit log lists SET_ACCOUNT_TYPE", any(a.get("actionType") == "SET_ACCOUNT_TYPE" for a in state_of(atok).get("auditLog", [])), state_of(atok).get("auditLog", [])[:2])
+    act(atok, "adminSetAccountType", {"userId": ud, "accountType": "FAMILY", "reason": "برگشت"})
+    check("S10 admin account type cannot change", act(atok, "adminSetAccountType", {"userId": auid, "accountType": "FAMILY", "reason": "r"}).get("ok") is False)
+    check("S10 setAccountStatus unknown user error", act(atok, "setAccountStatus", {"userId": "u_nope", "status": "BLOCKED", "reason": "r"}).get("ok") is False)
+    check("S10 hideContent unknown content error", act(atok, "hideContent", {"type": "QUESTION", "contentId": "q_nope", "reason": "r"}).get("ok") is False)
+
+    # S11 blocks, privacy
+    act(tc, "blockUser", {"targetUserId": ud})
+    stD = state_of(td)
+    check("S11 blocker not visible to blocked user (users)", all(u["id"] != uc for u in stD["users"]))
+    check("S11 blocker hidden from blocked user's professionals", all(p["userId"] != uc for p in stD["professionals"]))
+    check("S11 blocked pair cannot start a conversation", act(td, "requestConversation", {"recipientUserId": uc, "message": "x"}).get("ok") is False)
+    act(tc, "unblockUser", {"targetUserId": ud})
+
+    # S12 slots
+    now = int(time.time() * 1000)
+    r = act(tc, "recSave", {"kind": "slot", "data": {"when": "گذشته", "duration": "30", "epochMs": now - 86400000}})
+    check("S12 past slot rejected", r.get("ok") is False, r)
+    r = act(tc, "recSave", {"kind": "slot", "data": {"when": "آینده", "duration": "30", "epochMs": now + 3 * 86400000}})
+    check("S12 future slot saved with epochMs", r.get("ok"), r)
+    sid = r["data"]["id"]
+    lst = act(td, "recList", {"kind": "slot"}).get("data", {})
+    items = lst.get("items", lst if isinstance(lst, list) else [])
+    check("S12 slot list has epochMs", any(i.get("id") == sid and i.get("epochMs") for i in items), lst)
+    check("S12 owner cannot self-book", act(tc, "slotBook", {"id": sid}).get("ok") is False)
+    r = act(td, "slotBook", {"id": sid})
+    check("S12 book ok", r.get("ok"), r)
+    check("S12 booked slot cannot be edited", act(tc, "recSave", {"kind": "slot", "id": sid, "data": {"when": "x", "duration": "40", "epochMs": now + 4 * 86400000}}).get("ok") is False)
+    check("S12 owner notified of booking", notes_of(tc, "BOOKING"))
+    act(td, "slotCancel", {"id": sid})
+
+    # S13 conversation / message guards
+    rc = act(td, "requestConversation", {"recipientUserId": uc, "message": "سلام"})
+    check("S13 requestConversation ok", rc.get("ok"), rc)
+
+    # S14 admin stats + broadcast
+    st = act(atok, "adminStats").get("data", {})
+    check("S14 adminStats has moduleRoles/disabledFeatures", "moduleRoles" in st and "disabledFeatures" in st, list(st))
+    r = act(atok, "adminBroadcast", {"title": "آزمون", "body": "پیام آزمایشی"})
+    bd = r.get("data", {})
+    check("S14 adminBroadcast returns counts", r.get("ok") and "sent" in bd and "skipped" in bd, r)
+    r = act(atok, "adminIssueReset", {"email": mailD})
+    check("S14 adminIssueReset notifies target", r.get("ok") and notes_of(td, "SAFETY_NOTICE"), r)
+
+    # S15/S16 blocked & limited accounts
+    act(atok, "setAccountStatus", {"userId": ud, "status": "LIMITED", "reason": "test"})
+    r = act(td, "recSave", {"kind": "diary", "data": {"note": "x", "date": "2026-10-30"}})
+    check("S15 limited account cannot mutate", r.get("ok") is False, r)
+    check("S15 limited account can still read", http("GET", "/api/state", token=td)[0] == 200)
+    act(atok, "setAccountStatus", {"userId": ud, "status": "ACTIVE", "reason": "ok"})
+    check("S15 restored account can mutate", act(td, "updateProfile", {"displayName": "D"}).get("ok"))
+
+    # S17 state scoping
+    stD = state_of(td)
+    check("S17 users scoped (not whole directory)", len(stD["users"]) < sql("SELECT count(*) FROM docs WHERE collection='users'")[0][0] or sql("SELECT count(*) FROM docs WHERE collection='users'")[0][0] < 8)
+    check("S17 non-admin sees no other pending pro", all(p["verificationStatus"] == "VERIFIED" or p["userId"] == ud for p in stD["professionals"]))
+    check("S17 non-admin verifications only own", all(v["userId"] == ud for v in stD["verifications"]))
+
+    files_tests(atok, tc, td, ppid, doc)
+
+    # S18 deleteAccount hands over groups and anonymises
+    gid3 = act(td, "createGroup", {"title": "گروه رها"})["data"]["id"]
+    act(tc, "joinOrRequest", {"groupId": gid3})
+    r = act(td, "deleteAccount", {"password": pw})
+    check("S18 deleteAccount with password", r.get("ok"), r)
+    own = [m for m in sql("SELECT data->>'userId', data->>'role' FROM docs WHERE collection='memberships' AND data->>'groupId'=%s", (gid3,))]
+    check("S18 group handed to remaining member", (uc, "OWNER") in own, own)
+
+
+def files_tests(atok, tc, td, ppid, doc):
+    """S19: signed file URLs, in both modes. Mode A = running server (FILES_ENFORCE off), mode B = a second
+    instance started with FILES_ENFORCE=1."""
+    global BASE
+    r = act(tc, "fileUrls", {"ids": [ppid, "0" * 32, "f" * 32, "bad"]})
+    urls = r.get("data", {}).get("urls", {})
+    check("S19 fileUrls returns signed url for own file", ppid in urls and "exp=" in urls[ppid] and "sig=" in urls[ppid], r)
+    check("S19 fileUrls omits zero/missing/bad ids", set(urls) == {ppid}, urls)
+    check("S19 fileUrls rejects >100 ids", act(tc, "fileUrls", {"ids": [ppid] * 101}).get("ok") is False)
+    check("S19 fileUrls: other user's private doc omitted", doc not in act(td, "fileUrls", {"ids": [doc]}).get("data", {}).get("urls", {}))
+    path = "/api/" + urls[ppid]
+    exp = int(urls[ppid].split("exp=")[1].split("&")[0])
+    sig = urls[ppid].split("sig=")[1]
+
+    def modes(label, base, enforced):
+        global BASE
+        saved, BASE = BASE, base
+        try:
+            check("S19[%s] signed url works without auth" % label, http("GET", path)[0] == 200)
+            check("S19[%s] forged sig -> 403" % label, http("GET", "/api/files/%s?exp=%d&sig=%s" % (ppid, exp, "0" * 32))[0] == 403)
+            check("S19[%s] tampered exp -> 403" % label, http("GET", "/api/files/%s?exp=%d&sig=%s" % (ppid, exp + 5, sig))[0] == 403)
+            check("S19[%s] expired signed url -> 403" % label, http("GET", "/api/files/%s?exp=%d&sig=%s" % (ppid, int(time.time()) - 5, H._file_sig(ppid, int(time.time()) - 5)))[0] == 403)
+            check("S19[%s] sig of another file -> 403" % label, http("GET", "/api/files/%s?exp=%d&sig=%s" % (doc, exp, sig))[0] == 403)
+            check("S19[%s] owner Bearer works" % label, http("GET", "/api/files/" + ppid, token=tc)[0] == 200)
+            check("S19[%s] admin Bearer works on any file" % label, http("GET", "/api/files/" + doc, token=atok)[0] == 200)
+            check("S19[%s] non-owner Bearer on private doc" % label, http("GET", "/api/files/" + doc, token=td)[0] == (200 if not enforced else 403))
+            check("S19[%s] bare url %s" % (label, "blocked" if enforced else "still works (0.13 clients)"),
+                  http("GET", "/api/files/" + doc)[0] == (403 if enforced else 200))
+            check("S19[%s] missing file 404" % label, http("GET", "/api/files/" + "e" * 32)[0] == 404)
+        finally:
+            BASE = saved
+
+    modes("enforce off", BASE, False)
+    port = 8159
+    env = dict(os.environ, PORT=str(port), FILES_ENFORCE="1")
+    proc = subprocess.Popen([sys.executable, os.path.join(HERE, "hamrah-api.py")], env=env, cwd=HERE,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        base2 = "http://127.0.0.1:%d" % port
+        up = False
+        for _ in range(40):
+            try:
+                if urllib.request.urlopen(base2 + "/api/health", timeout=2).status == 200:
+                    up = True
+                    break
+            except Exception:
+                time.sleep(0.5)
+        check("S19 enforcing instance started", up)
+        if up:
+            modes("enforce on", base2, True)
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except Exception:
+            proc.kill()
+
+
 def cleanup():
     for tok, uid in made:
         try:
             if sql("SELECT 1 FROM docs WHERE collection='users' AND id=%s", (uid,)):
                 st = H.Store()
-                H.a_deleteAccount(st, uid, {})
+                H.wipe_account(st, uid)
         except Exception as e:
             print("cleanup error for", uid, e)
     uids = [u for _, u in made]

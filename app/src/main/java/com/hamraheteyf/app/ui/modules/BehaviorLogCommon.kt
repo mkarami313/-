@@ -39,19 +39,25 @@ fun rememberChildren(): List<ChildProfilePrivate> {
     return list
 }
 
+/** Filter value for entries saved before children existed (no childId). */
+const val UNASSIGNED_CHILD = "_none"
+
 fun List<ChildProfilePrivate>.nameOf(id: String): String {
-    val i = indexOfFirst { it.id == id }
-    if (i < 0) return ""
-    return this[i].nickname?.takeIf { it.isNotBlank() } ?: "کودک ${(i + 1).toPersianDigits()}"
+    val c = firstOrNull { it.id == id } ?: return ""
+    c.nickname?.takeIf { it.isNotBlank() }?.let { return it }
+    // Ordinal by creation time (not list order) so «کودک N» stays put when the list is re-sorted.
+    val n = sortedWith(compareBy({ it.createdAt }, { it.id })).indexOfFirst { it.id == id } + 1
+    return "کودک ${n.toPersianDigits()}"
 }
 
 /** Row of child chips. [selected] = "" means "all"/none. [allLabel] null hides the "all" chip. */
 @Composable
-fun ChildChipRow(children: List<ChildProfilePrivate>, selected: String, onSelect: (String) -> Unit, allLabel: String? = "همه", modifier: Modifier = Modifier) {
+fun ChildChipRow(children: List<ChildProfilePrivate>, selected: String, onSelect: (String) -> Unit, allLabel: String? = "همه", modifier: Modifier = Modifier, unassignedLabel: String? = null) {
     if (children.isEmpty()) return
     LazyRow(modifier, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         if (allLabel != null) item { FilterChip(selected.isBlank(), { onSelect("") }, label = { Text(allLabel) }) }
         items(children, key = { it.id }) { c -> FilterChip(selected == c.id, { onSelect(c.id) }, label = { Text(children.nameOf(c.id)) }) }
+        if (unassignedLabel != null) item { FilterChip(selected == UNASSIGNED_CHILD, { onSelect(UNASSIGNED_CHILD) }, label = { Text(unassignedLabel) }) }
     }
 }
 

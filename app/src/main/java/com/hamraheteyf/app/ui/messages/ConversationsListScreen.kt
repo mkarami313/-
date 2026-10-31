@@ -31,11 +31,13 @@ class ConversationsListViewModel(
     auth: AuthRepository,
 ) : ViewModel() {
     val rows: StateFlow<List<ConversationRow>> = combine(
-        convRepo.observeConversations(), userRepo.observeUsers(), auth.currentUserId,
-    ) { conversations, users, me ->
-        conversations.map { c ->
+        convRepo.observeConversations(), userRepo.observeUsers(), auth.currentUserId, userRepo.observeCurrentUser(),
+    ) { conversations, users, me, meUser ->
+        val blocked = meUser?.blockedUserIds.orEmpty()
+        conversations.mapNotNull { c ->
             val otherId = c.participantIds.firstOrNull { it != me }
-            ConversationRow(c, users.find { it.id == otherId }?.displayName ?: "کاربر")
+            if (otherId != null && otherId in blocked) null
+            else ConversationRow(c, users.find { it.id == otherId }?.displayName ?: "کاربر")
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 }

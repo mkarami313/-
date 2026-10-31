@@ -46,6 +46,10 @@ interface AuthRepository {
 
     /** Deletes the signed-in account and its personal data (see policy in docs). */
     suspend fun deleteAccount(): DataResult<Unit>
+
+    /** Account-security actions; backends that lack them report an error instead of silently succeeding. */
+    suspend fun changePassword(current: String, new: String): DataResult<Unit> = DataResult.Error("این قابلیت در دسترس نیست.")
+    suspend fun deleteAccount(password: String): DataResult<Unit> = deleteAccount()
 }
 
 interface UserRepository {
@@ -64,6 +68,10 @@ interface UserRepository {
         photoUrl: String?,
     ): DataResult<Unit>
 
+    /** Like [updateProfile] but sets the avatar by uploaded file id ([photoId]: null keeps it, "" clears it). */
+    suspend fun updateProfileWithPhoto(displayName: String, city: String?, bio: String?, photoId: String?): DataResult<Unit> =
+        updateProfile(displayName, city, bio, null)
+
     suspend fun updatePrivacy(settings: PrivacySettings): DataResult<Unit>
     suspend fun updateNotificationSettings(settings: NotificationSettings): DataResult<Unit>
 
@@ -78,6 +86,9 @@ interface UserRepository {
         city: String?,
         offersOnline: Boolean,
         experience: String?,
+        photoId: String? = null,
+        fee: String? = null,
+        hours: String? = null,
     ): DataResult<Unit>
 
     fun searchProfessionals(filter: ProfessionalFilter): Flow<List<ProfessionalDirectoryItem>>
@@ -87,6 +98,8 @@ interface UserRepository {
         professionalTitle: String,
         licenseNumber: String?,
         credentialNote: String?,
+        requestedType: AccountType? = null,
+        documentRefs: List<String> = emptyList(),
     ): DataResult<Unit>
 
     fun observeMyVerification(): Flow<VerificationRequest?>
@@ -99,10 +112,20 @@ interface UserRepository {
         interests: List<String>,
     ): DataResult<Unit>
     suspend fun deleteChild(childId: String): DataResult<Unit>
+    suspend fun updateChild(childId: String, nickname: String?, ageRange: AgeRange, interests: List<String>, notes: String? = null): DataResult<Unit> =
+        DataResult.Error("این قابلیت در دسترس نیست.")
 
     /** Produces a user-facing export of the signed-in user's own data (for data-access requests). */
     suspend fun exportMyData(): DataResult<String>
+
+    /** Machine-readable export (a real JSON file) alongside the human summary; unsupported backends fall back to the summary. */
+    suspend fun exportMyDataFile(): DataResult<ExportFile> = when (val r = exportMyData()) {
+        is DataResult.Success -> DataResult.Success(ExportFile("hamrah-export.txt", r.data, r.data))
+        is DataResult.Error -> DataResult.Error(r.message)
+    }
 }
+
+data class ExportFile(val filename: String, val content: String, val summary: String)
 
 interface QuestionRepository {
     fun observeQuestions(sort: QuestionSort, category: QuestionCategory?): Flow<List<Question>>

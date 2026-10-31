@@ -52,11 +52,14 @@ class AuthViewModel(
         password: String,
         accountType: AccountType,
         acceptedTerms: Boolean,
+        onSuccess: () -> Unit = {},
     ) {
         _state.value = AuthUiState(loading = true)
-        viewModelScope.launch {
+        // NonCancellable: the register screen is torn down the moment the session becomes active,
+        // which would otherwise cancel this coroutine before onSuccess runs.
+        viewModelScope.launch(kotlinx.coroutines.NonCancellable) {
             when (val r = auth.register(displayName, email, password, accountType, acceptedTerms)) {
-                is DataResult.Success -> _state.value = AuthUiState()
+                is DataResult.Success -> { onSuccess(); _state.value = AuthUiState() }
                 is DataResult.Error -> _state.value = AuthUiState(error = r.message)
             }
         }

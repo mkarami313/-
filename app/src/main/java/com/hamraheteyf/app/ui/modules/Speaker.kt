@@ -125,16 +125,12 @@ class Speaker(private val ctx: Context, private val api: HamrahApi?, private val
     private suspend fun fetchClip(id: String): File? = withContext(Dispatchers.IO) {
         val f = File(dir, "clip_$id.snd")
         if (f.exists() && f.length() > 0) { f.setLastModified(System.currentTimeMillis()); return@withContext f }
-        val url = api?.fileUrl(id) ?: return@withContext null
+        if (api == null) return@withContext null
+        val bytes = com.hamraheteyf.app.net.FileUrls.download(id) ?: return@withContext null
         runCatching {
-            val c = URL(url).openConnection() as HttpURLConnection
-            try {
-                c.connectTimeout = 15_000; c.readTimeout = 30_000
-                if (c.responseCode !in 200..299) return@runCatching null
-                val tmp = File(dir, "clip_$id.part")
-                c.inputStream.use { inp -> tmp.outputStream().use { inp.copyTo(it) } }
-                if (tmp.length() > 0 && tmp.renameTo(f)) f else { tmp.delete(); null }
-            } finally { c.disconnect() }
+            val tmp = File(dir, "clip_$id.part")
+            tmp.writeBytes(bytes)
+            if (tmp.length() > 0 && tmp.renameTo(f)) f else { tmp.delete(); null }
         }.getOrNull()
     }
 

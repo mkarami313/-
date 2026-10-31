@@ -69,9 +69,4 @@ class FakeStore(seed: Db, seedCredentials: Map<String, String>) {
     fun removePassword(email: String) {
         credentials.remove(email.trim().lowercase())
     }
-
-    companion object {
-        /** Shared password for all seeded demo accounts. */
-        const val DEMO_PASSWORD = "demo1234"
-    }
 }

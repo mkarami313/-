@@ -26,11 +26,25 @@ fun SettingsScreen(onBack: () -> Unit) {
     val user by vm.currentUser.collectAsState()
     val blocked by vm.blockedUsers.collectAsState()
     val message by vm.message.collectAsState()
-    val exportText by vm.exportText.collectAsState()
+    val exportFile by vm.exportFile.collectAsState()
+    val appCtx = androidx.compose.ui.platform.LocalContext.current.applicationContext
+    val busy by vm.busy.collectAsState()
+    val saveLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri ->
+        val f = exportFile
+        if (uri != null && f != null) {
+            val ok = runCatching {
+                appCtx.contentResolver.openOutputStream(uri)?.use { it.write(f.content.toByteArray(Charsets.UTF_8)) } != null
+            }.getOrDefault(false)
+            vm.setMessage(if (ok) "فایل ذخیره شد." else "ذخیرهٔ فایل ناموفق بود.")
+        }
+    }
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(message) { message?.let { snackbar.showSnackbar(it); vm.clearMessage() } }
 
     var showDelete by remember { mutableStateOf(false) }
+    var showPassword by remember { mutableStateOf(false) }
 
     val privacy = user?.privacy ?: PrivacySettings()
     val notif = user?.notificationSettings ?: NotificationSettings()
@@ -71,7 +85,9 @@ fun SettingsScreen(onBack: () -> Unit) {
             SectionTitle("به‌روزرسانی برنامه")
             UpdateRow()
             SectionTitle("حساب و داده‌ها")
-            OutlinedButton(onClick = { vm.exportMyData() }, modifier = Modifier.fillMaxWidth()) { Text("درخواست نسخهٔ اطلاعات حساب") }
+            OutlinedButton(enabled = !busy, onClick = { vm.exportMyData() }, modifier = Modifier.fillMaxWidth()) { Text(if (busy) "در حال آماده‌سازی…" else "دریافت نسخهٔ اطلاعات حساب") }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = { showPassword = true }, modifier = Modifier.fillMaxWidth()) { Text("تغییر رمز عبور") }
             Spacer(Modifier.height(8.dp))
             OutlinedButton(onClick = { vm.logout() }, modifier = Modifier.fillMaxWidth()) { Text("خروج از حساب") }
             Spacer(Modifier.height(8.dp))
@@ -81,31 +97,25 @@ fun SettingsScreen(onBack: () -> Unit) {
             ) { Text("حذف حساب و داده‌های شخصی") }
 
             SectionTitle("ارتباط با مدیران")
-            Text("برای تماس با مدیران می‌توانید از مسیر گزارش محتوا استفاده کنید یا به support@example.com (نمونه) ایمیل بزنید.", style = MaterialTheme.typography.bodyMedium, color = mutedColor())
+            Text("برای تماس با مدیران از دکمهٔ «گزارش» در هر پرسش، پیام یا پروفایل استفاده کنید؛ گزارش‌ها مستقیم به مدیران می‌رسد.", style = MaterialTheme.typography.bodyMedium, color = mutedColor())
             Spacer(Modifier.height(24.dp))
         }
     }
 
     if (showDelete) {
-        AlertDialog(
-            onDismissRequest = { showDelete = false },
-            title = { Text("حذف حساب") },
-            text = { Text("با حذف حساب، اطلاعات شخصی شما (پروفایل، اطلاعات کودک، پیام‌ها و عضویت‌ها) حذف می‌شوند و مشارکت‌های عمومی‌تان ناشناس می‌شوند. این عمل قابل بازگشت نیست.") },
-            confirmButton = {
-                TextButton(onClick = { showDelete = false; vm.deleteAccount() }) {
-                    Text("حذف می‌کنم", color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = { TextButton(onClick = { showDelete = false }) { Text("انصراف") } },
-        )
+        DeleteAccountDialog(busy, onDismiss = { showDelete = false }) { pw, report -> vm.deleteAccount(pw, report) }
+    }
+    if (showPassword) {
+        ChangePasswordDialog(busy, onDismiss = { showPassword = false }) { cur, new, report -> vm.changePassword(cur, new, report) }
     }
 
-    exportText?.let { text ->
+    exportFile?.let { f ->
         AlertDialog(
-            onDismissRequest = { vm.clearExport() },
+            onDismissRequest = { vm.clearExportFile() },
             title = { Text("نسخهٔ اطلاعات حساب") },
-            text = { Column(Modifier.verticalScroll(rememberScrollState())) { Text(text, style = MaterialTheme.typography.bodyMedium) } },
-            confirmButton = { TextButton(onClick = { vm.clearExport() }) { Text("بستن") } },
+            text = { Column(Modifier.verticalScroll(rememberScrollState())) { Text(f.summary.ifBlank { "فایل آمادهٔ ذخیره است." }, style = MaterialTheme.typography.bodyMedium) } },
+            confirmButton = { TextButton(onClick = { saveLauncher.launch(f.filename) }) { Text("ذخیرهٔ فایل کامل (JSON)") } },
+            dismissButton = { TextButton(onClick = { vm.clearExportFile() }) { Text("بستن") } },
         )
     }
 }

@@ -46,7 +46,7 @@ enum class VerificationStatus(val label: String) {
 enum class AuthorBadge(val label: String) {
     FAMILY("خانواده"),
     COMMUNITY("عضو جامعه"),
-    PROFESSIONAL_UNVERIFIED("متخصص تأییدنشده"),
+    PROFESSIONAL_UNVERIFIED("متخصص (بدون نشان تأیید)"),
     PROFESSIONAL_VERIFIED("متخصص تأییدشده");
 }
 

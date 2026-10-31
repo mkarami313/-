@@ -53,6 +53,10 @@ fun OnboardingScreen(onFinished: () -> Unit) {
     var ageIdx by rememberSaveable { mutableIntStateOf(0) }
     var ageMenu by remember { mutableStateOf(false) }
     var added by rememberSaveable { mutableStateOf(false) }
+    val busy by vm.busy.collectAsState()
+    val message by vm.message.collectAsState()
+    val snackbar = remember { SnackbarHostState() }
+    LaunchedEffect(message) { message?.let { snackbar.showSnackbar(it); vm.clearMessage() } }
 
     fun finish(save: Boolean) {
         val id = uid
@@ -64,7 +68,7 @@ fun OnboardingScreen(onFinished: () -> Unit) {
         onFinished()
     }
 
-    Scaffold { pad ->
+    Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { pad ->
         Column(Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("مرحلهٔ ${(step + 1).toPersianDigits()} از ${3.toPersianDigits()}", style = MaterialTheme.typography.labelLarge, color = mutedColor(), modifier = Modifier.weight(1f))
@@ -116,8 +120,8 @@ fun OnboardingScreen(onFinished: () -> Unit) {
                             }
                         }
                         Spacer(Modifier.height(16.dp))
-                        BigPrimaryButton("افزودن کودک", enabled = nickname.isNotBlank(), onClick = {
-                            vm.addChild(nickname.trim(), AgeRange.entries[ageIdx], emptyList()); added = true
+                        BigPrimaryButton(if (busy) "در حال افزودن…" else "افزودن کودک", enabled = nickname.isNotBlank() && !busy, onClick = {
+                            vm.addChild(nickname.trim(), AgeRange.entries[ageIdx], emptyList()) { ok -> if (ok) added = true }
                         })
                     }
                 }

@@ -270,9 +270,9 @@ def _b64d(s):
     return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
 
-def make_token(uid):
+def make_token(uid, iat=None):
     header = _b64(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
-    now = int(time.time())
+    now = int(iat if iat is not None else time.time())
     payload = _b64(json.dumps({"uid": uid, "iat": now, "exp": now + TOKEN_TTL}).encode())
     signing = ("%s.%s" % (header, payload)).encode()
     sig = _b64(hmac.new(JWT_SECRET, signing, hashlib.sha256).digest())
@@ -503,13 +503,13 @@ def push_to_user(store, user_id, nid, ntype, title, body, related_id):
     _fcm_fanout([(t, nid) for t in tokens], title, body, ntype, related_id)
 
 
-def add_notification(store, user_id, ntype, title, body, related_id=None):
+def add_notification(store, user_id, ntype, title, body, related_id=None, force=False):
     recipient = store.get("users", user_id)
     if not recipient:
         return
     settings = recipient.get("notificationSettings") or {}
     key = NOTIF_TOGGLE.get(ntype)
-    if key is not None and settings.get(key, True) is False:
+    if not force and key is not None and settings.get(key, True) is False:
         return
     nid = new_id("n")
     store.put("notifications", {
@@ -550,6 +550,42 @@ def _require(uid):
     return uid
 
 
+LIMITED_MSG = "حساب شما محدود شده است و فقط امکان مشاهده دارید."
+# Actions a LIMITED account may still run: reads, and everything that only removes/protects its own data.
+LIMITED_OK = {
+    "state", "recList", "donationList", "donationGet", "search", "shareList", "shareView", "exportMyData",
+    "fileUrls", "deleteAccount", "changePassword", "logoutAllDevices", "blockUser", "unblockUser",
+    "updatePrivacy", "updateNotificationSettings", "markRead", "markAllRead", "registerPush",
+    "unregisterPush", "recDelete", "deleteChild", "deleteQuestion", "deletePost", "leave", "shareRevoke",
+    "endConversation", "declineConversation", "toggleMute", "slotCancel", "donationRemove",
+}
+
+
+def _require_active(store, uid, name=""):
+    """Writes need an ACTIVE account. LIMITED may still read and delete/protect its own data."""
+    _require(uid)
+    u = store.get("users", uid)
+    if u and u.get("status") == "LIMITED" and name not in LIMITED_OK and not u.get("isAdmin"):
+        raise ApiError(LIMITED_MSG)
+    return u
+
+
+def _blocked_between(store, a, b):
+    """True when either user has blocked the other."""
+    ua, ub = store.get("users", a) or {}, store.get("users", b) or {}
+    return b in (ua.get("blockedUserIds") or []) or a in (ub.get("blockedUserIds") or [])
+
+
+def _blocked_ids(store, uid):
+    """Ids hidden from `uid`: everyone they blocked plus everyone who blocked them."""
+    me = store.get("users", uid) or {}
+    out = set(me.get("blockedUserIds") or [])
+    for u in store.all("users"):
+        if uid in (u.get("blockedUserIds") or []):
+            out.add(u["id"])
+    return out
+
+
 # ---- User / professional / children / verification ----
 
 def a_updateProfile(store, uid, args):
@@ -562,8 +598,21 @@ def a_updateProfile(store, uid, args):
     u["displayName"] = _s(args.get("displayName"))[:60]
     u["city"] = _s(args.get("city"))[:60] or None
     u["bio"] = _s(args.get("bio"))[:600] or None
-    photo = args.get("photoUrl")
-    u["photoUrl"] = photo[:500] if isinstance(photo, str) else None
+    old_pid = u.get("photoId")
+    pid = args.get("photoId")
+    if isinstance(pid, str) and pid == "":  # explicit removal
+        u["photoId"], u["photoUrl"] = None, None
+    elif isinstance(pid, str):
+        if not HEX32.fullmatch(pid):
+            raise ApiError("شناسهٔ فایل نامعتبر است.")
+        _check_file_ownership(store, uid, [pid], image_only=True)
+        u["photoId"], u["photoUrl"] = pid, "files/%s" % pid
+    else:  # absent/null never wipes the photo
+        photo = args.get("photoUrl")
+        if isinstance(photo, str) and photo.strip():
+            u["photoUrl"] = photo.strip()[:500]
+    if old_pid and old_pid != u.get("photoId"):
+        _drop_file(store, uid, old_pid)
     u["updatedAt"] = now_ms()
     store.put("users", u)
 
@@ -620,6 +669,49 @@ def a_unblockUser(store, uid, args):
     store.put("users", u)
 
 
+def _pro_fields(args):
+    title = _s(args.get("title"))
+    if not title:
+        raise ApiError("عنوان تخصص را وارد کنید.")
+    if len(title) > 80:
+        raise ApiError("عنوان تخصص حداکثر ۸۰ نویسه باشد.")
+    raw = args.get("workAreas")
+    if raw is None:
+        raw = []
+    bad_areas = ApiError("حوزه‌های کاری حداکثر ۲۰ مورد و هرکدام تا ۴۰ نویسه باشد.")
+    if not isinstance(raw, list):
+        raise bad_areas
+    areas = []
+    for x in raw:
+        if not isinstance(x, str):
+            raise bad_areas
+        x = x.strip()
+        if len(x) > 40:
+            raise bad_areas
+        if x and x not in areas:
+            areas.append(x)
+    if len(areas) > 20:
+        raise bad_areas
+    city, exp = _s(args.get("city")), _s(args.get("experience"))
+    if len(city) > 60:
+        raise ApiError("شهر حداکثر ۶۰ نویسه باشد.")
+    if len(exp) > 3000:
+        raise ApiError("سابقه حداکثر ۳۰۰۰ نویسه باشد.")
+    out = {"title": title, "workAreas": areas, "city": city or None,
+           "offersOnline": bool(args.get("offersOnline")), "experience": exp or None}
+    for key, limit, label in (("fee", 80, "هزینه ویزیت حداکثر ۸۰ نویسه باشد."),
+                              ("hours", 120, "ساعات کاری حداکثر ۱۲۰ نویسه باشد.")):
+        if args.get(key) is None:  # absent/null leaves the stored value alone
+            continue
+        if not isinstance(args[key], str):
+            raise ApiError(label)
+        v = args[key].strip()
+        if len(v) > limit:
+            raise ApiError(label)
+        out[key] = v or None
+    return out
+
+
 def a_upsertProfessionalProfile(store, uid, args):
     _require(uid)
     u = store.get("users", uid)
@@ -628,27 +720,30 @@ def a_upsertProfessionalProfile(store, uid, args):
     if u.get("accountType") not in PRO_TYPES and not any(
             v.get("userId") == uid for v in store.all("verifications")):
         raise ApiError("ابتدا درخواست تأیید تخصص ثبت کنید.")
-    if not _s(args.get("title")):
-        raise ApiError("عنوان تخصص را وارد کنید.")
+    fields = _pro_fields(args)
     existing = next((p for p in store.all("professionals") if p.get("userId") == uid), None)
+    pid, old_pid = args.get("photoId"), (existing or {}).get("photoId")
+    if isinstance(pid, str) and pid == "":
+        fields["photoId"] = None
+    elif isinstance(pid, str):
+        if not HEX32.fullmatch(pid):
+            raise ApiError("شناسهٔ فایل نامعتبر است.")
+        _check_file_ownership(store, uid, [pid], image_only=True)
+        fields["photoId"] = pid
+    if old_pid and "photoId" in fields and fields["photoId"] != old_pid:
+        _drop_file(store, uid, old_pid)
     if existing:
-        existing.update({
-            "title": _s(args.get("title")),
-            "workAreas": args.get("workAreas") or [],
-            "city": _s(args.get("city")) or None,
-            "offersOnline": bool(args.get("offersOnline")),
-            "experience": _s(args.get("experience")) or None,
-            "updatedAt": now_ms(),
-        })
+        existing.update(fields, updatedAt=now_ms())
         store.put("professionals", existing)
     else:
-        store.put("professionals", {
-            "id": new_id("p"), "userId": uid, "title": _s(args.get("title")),
-            "workAreas": args.get("workAreas") or [], "city": _s(args.get("city")) or None,
-            "offersOnline": bool(args.get("offersOnline")),
-            "experience": _s(args.get("experience")) or None,
-            "verificationStatus": "NONE", "createdAt": now_ms(), "updatedAt": now_ms(),
-        })
+        status = "VERIFIED" if u.get("accountType") in PRO_TYPES else "NONE"
+        store.put("professionals", dict(fields, id=new_id("p"), userId=uid, verificationStatus=status,
+                                        createdAt=now_ms(), updatedAt=now_ms()))
+
+
+def _latest_verification(store, uid):
+    mine = [v for v in store.all("verifications") if v.get("userId") == uid]
+    return max(mine, key=lambda v: (v.get("createdAt", 0), v.get("updatedAt", 0)), default=None)
 
 
 def a_submitVerificationRequest(store, uid, args):
@@ -661,16 +756,31 @@ def a_submitVerificationRequest(store, uid, args):
     title = _s(args.get("professionalTitle"))
     if not title:
         raise ApiError("عنوان تخصص را وارد کنید.")
-    # Replace any existing PENDING request from this user.
+    if len(title) > 80:
+        raise ApiError("عنوان تخصص حداکثر ۸۰ نویسه باشد.")
+    rtype = args.get("requestedType") or args.get("accountType") or "PROFESSIONAL"
+    if rtype not in PRO_TYPES:
+        raise ApiError("نوع تخصص نامعتبر است.")
+    if u.get("accountType") in PRO_TYPES:
+        raise ApiError("تخصص شما قبلاً تأیید شده است.")
+    refs = args.get("documentRefs") or []
+    if not isinstance(refs, list) or len(refs) > 5 or any(not isinstance(x, str) or not HEX32.fullmatch(x) for x in refs):
+        raise ApiError("مدارک پیوست‌شده نامعتبر است.")
+    refs = list(dict.fromkeys(refs))
+    _check_file_ownership(store, uid, refs)
+    if not RL.allow("verif:" + uid, 5, 86400):
+        raise ApiError("تعداد درخواست‌ها زیاد است؛ کمی بعد دوباره تلاش کنید.")
+    lic, note = _s(args.get("licenseNumber")), _s(args.get("credentialNote"))
+    if len(lic) > 60 or len(note) > 2000:
+        raise ApiError("متن وارد‌شده بیش از حد طولانی است.")
+    # Replace any existing PENDING request from this user (its documents are not orphaned: the new one reuses or drops them).
     store.delete_where("verifications",
                        lambda v: v.get("userId") == uid and v.get("status") == "PENDING")
     store.put("verifications", {
         "id": new_id("v"), "userId": uid, "professionalTitle": title,
-        "licenseNumber": _s(args.get("licenseNumber")) or None,
-        "credentialNote": _s(args.get("credentialNote")) or None,
-        "requestedType": args.get("accountType") if args.get("accountType") in PRO_TYPES else (
-            u.get("accountType") if u.get("accountType") in PRO_TYPES else "PROFESSIONAL"),
-        "documentRefs": [], "status": "PENDING", "createdAt": now_ms(), "updatedAt": now_ms(),
+        "licenseNumber": lic or None, "credentialNote": note or None,
+        "requestedType": rtype, "documentRefs": refs,
+        "status": "PENDING", "createdAt": now_ms(), "updatedAt": now_ms(),
     })
     existing = next((p for p in store.all("professionals") if p.get("userId") == uid), None)
     if existing:
@@ -685,19 +795,57 @@ def a_submitVerificationRequest(store, uid, args):
         })
 
 
+def _child_fields(src, creating):
+    out = {}
+    if creating or "nickname" in src:
+        nick = _s(src.get("nickname"))[:60]
+        if "nickname" in src and not nick and not creating:
+            raise ApiError("نام کودک را وارد کنید.")
+        out["nickname"] = nick or None
+    if creating or "ageRange" in src:
+        age = src.get("ageRange")
+        out["ageRange"] = age[:30] if isinstance(age, str) and age.strip() else "UNSPECIFIED"
+    if creating or "interests" in src:
+        raw = src.get("interests") or []
+        if not isinstance(raw, list):
+            raise ApiError("علاقه‌مندی‌ها نامعتبر است.")
+        out["interests"] = [_s(i)[:40] for i in raw[:20] if isinstance(i, str) and _s(i)]
+    if "notes" in src or creating:
+        notes = src.get("notes")
+        notes = notes.strip() if isinstance(notes, str) else ""
+        if len(notes) > 1000:
+            raise ApiError("یادداشت حداکثر ۱۰۰۰ نویسه باشد.")
+        if notes or "notes" in src:
+            out["notes"] = notes
+    return out
+
+
 def a_addChild(store, uid, args):
     _require(uid)
-    store.put("children", {
-        "id": new_id("c"), "familyUserId": uid, "nickname": _s(args.get("nickname"))[:60] or None,
-        "ageRange": args.get("ageRange") or "UNSPECIFIED",
-        "interests": [_s(i)[:40] for i in (args.get("interests") or [])[:20] if isinstance(i, str)],
-        "isPublic": False, "createdAt": now_ms(), "updatedAt": now_ms(),
-    })
+    if sum(1 for c in store.all("children") if c.get("familyUserId") == uid) >= 20:
+        raise ApiError("به سقف تعداد پروفایل کودک رسیده‌اید.")
+    store.put("children", dict(_child_fields(args, True), id=new_id("c"), familyUserId=uid,
+                               isPublic=False, createdAt=now_ms(), updatedAt=now_ms()))
+
+
+def a_updateChild(store, uid, args):
+    _require(uid)
+    cid = _s(args.get("id") or args.get("childId"))
+    mine = next((c for c in store.all("children") if c.get("id") == cid and c.get("familyUserId") == uid), None)
+    if not mine:
+        raise ApiError("پروفایل کودک پیدا نشد.")
+    fields = args.get("fields")
+    src = fields if isinstance(fields, dict) else args
+    mine.update(_child_fields(src, False))
+    mine["updatedAt"] = now_ms()
+    store.put("children", mine)
 
 
 def a_deleteChild(store, uid, args):
     _require(uid)
-    cid = args.get("childId")
+    if args.get("confirm") is not True:
+        raise ApiError("برای حذف پروفایل کودک تأیید لازم است (در صورت نیاز برنامه را به‌روز کنید).")
+    cid = args.get("childId") or args.get("id")
     mine = next((c for c in store.all("children") if c.get("id") == cid and c.get("familyUserId") == uid), None)
     if not mine:
         return
@@ -715,19 +863,45 @@ def a_exportMyData(store, uid, args):
     u = store.get("users", uid)
     if not u:
         raise ApiError("حساب یافت نشد.")
+    mine = {k: [d for d in store.all("r_" + k) if d.get("ownerId") == uid] for k in REC_KINDS}
+    convs = [c for c in store.all("conversations") if uid in (c.get("participantIds") or [])]
+    cids = {c["id"] for c in convs}
+    prof = next((p for p in store.all("professionals") if p.get("userId") == uid), None)
+    export = {
+        "exportedAt": now_ms(), "app": "hamrah-teyf",
+        "profile": {k: v for k, v in u.items() if k != "tokensValidAfter"},
+        "professionalProfile": prof,
+        "verificationRequests": [v for v in store.all("verifications") if v.get("userId") == uid],
+        "children": [c for c in store.all("children") if c.get("familyUserId") == uid],
+        "records": {k: v for k, v in mine.items() if v},
+        "bookedSlots": [d for d in store.all("r_slot") if d.get("bookedBy") == uid],
+        "questions": [q for q in store.all("questions") if q.get("authorId") == uid],
+        "answers": [a for a in store.all("answers") if a.get("authorId") == uid],
+        "posts": [p for p in store.all("posts") if p.get("authorId") == uid],
+        "memberships": [m for m in store.all("memberships") if m.get("userId") == uid],
+        "conversations": convs,
+        "messages": [m for m in store.all("messages") if m.get("conversationId") in cids],
+        "shares": [{k: v for k, v in sh.items() if k != "codeHash"} for sh in store.all("shares")
+                   if sh.get("ownerId") == uid],
+        "donations": [d for d in store.all("donations") if d.get("ownerId") == uid],
+        "notifications": [n for n in store.all("notifications") if n.get("userId") == uid],
+        "files": [{k: f.get(k) for k in ("id", "name", "mime", "size", "createdAt")}
+                  for f in store.all("files") if f.get("ownerId") == uid],
+    }
     lines = [
         "# نسخهٔ اطلاعات حساب شما",
         "نام نمایشی: %s" % u.get("displayName", ""),
         "نوع حساب: %s" % u.get("accountType", ""),
         "ایمیل: %s" % (u.get("email") or "-"),
         "شهر: %s" % (u.get("city") or "-"),
-        "تعداد پرسش‌ها: %d" % sum(1 for q in store.all("questions") if q.get("authorId") == uid),
-        "تعداد پاسخ‌ها: %d" % sum(1 for a in store.all("answers") if a.get("authorId") == uid),
-        "تعداد پروفایل‌های کودک: %d" % sum(1 for c in store.all("children") if c.get("familyUserId") == uid),
-        "عضویت در گروه‌ها: %d" % sum(1 for m in store.all("memberships")
-                                      if m.get("userId") == uid and m.get("status") == "ACTIVE"),
+        "تعداد پرسش‌ها: %d" % len(export["questions"]),
+        "تعداد پاسخ‌ها: %d" % len(export["answers"]),
+        "تعداد پروفایل‌های کودک: %d" % len(export["children"]),
+        "عضویت در گروه‌ها: %d" % sum(1 for m in export["memberships"] if m.get("status") == "ACTIVE"),
     ]
-    return {"text": "\n".join(lines)}
+    return {"json": json.dumps(export, ensure_ascii=False, indent=2),
+            "text": "\n".join(lines),
+            "filename": "hamrah-export-%s.json" % time.strftime("%Y-%m-%d")}
 
 
 def _unlink_file(doc):
@@ -739,11 +913,86 @@ def _unlink_file(doc):
             pass
 
 
+def a_changePassword(store, uid, args):
+    _require(uid)
+    u = store.get("users", uid)
+    if not u or not u.get("email"):
+        raise ApiError("حساب یافت نشد.")
+    cur_pw, new_pw = args.get("current"), args.get("new")
+    key = "chpw:" + uid
+    if RL.blocked(key, 5, 900):
+        raise ApiError(TOO_MANY)
+    if not isinstance(cur_pw, str) or not cur_pw or len(cur_pw) > MAX_PASSWORD \
+            or check_cred(u["email"], cur_pw) != uid:
+        RL.hit(key, 900)
+        raise ApiError("رمز فعلی نادرست است.")
+    if not isinstance(new_pw, str) or len(new_pw) < 6:
+        raise ApiError("رمز عبور باید حداقل ۶ نویسه باشد.")
+    if len(new_pw) > MAX_PASSWORD:
+        raise ApiError("رمز عبور بیش از حد طولانی است.")
+    if new_pw == cur_pw:
+        raise ApiError("رمز جدید باید با رمز فعلی متفاوت باشد.")
+    set_cred(u["email"], new_pw, uid)
+    iat = int(time.time()) + 1  # every older token (other devices) dies; the returned one lives
+    u["tokensValidAfter"] = iat
+    u["updatedAt"] = now_ms()
+    store.put("users", u)
+    RL.clear(key)
+    return {"token": make_token(uid, iat)}
+
+
 def a_deleteAccount(store, uid, args):
     _require(uid)
     u = store.get("users", uid)
     if not u:
         raise ApiError("حساب یافت نشد.")
+    pw = args.get("password")
+    if not isinstance(pw, str) or not pw:
+        raise ApiError("برای حذف حساب، رمز عبور را وارد کنید (در صورت نیاز برنامه را به‌روز کنید).")
+    key = "delpw:" + uid
+    if RL.blocked(key, 5, 900):
+        raise ApiError(TOO_MANY)
+    if len(pw) > MAX_PASSWORD or not u.get("email") or check_cred(u["email"], pw) != uid:
+        RL.hit(key, 900)
+        raise ApiError("رمز عبور نادرست است.")
+    wipe_account(store, uid)
+
+
+def _hand_over_groups(store, uid):
+    """Groups the leaving user owned: hand to the oldest active moderator/member, else archive."""
+    for g in list(store.all("groups")):
+        if g.get("ownerId") != uid:
+            continue
+        cands = sorted((m for m in store.all("memberships")
+                        if m.get("groupId") == g["id"] and m.get("userId") != uid and m.get("status") == "ACTIVE"),
+                       key=lambda m: (0 if m.get("role") == "MODERATOR" else 1, m.get("createdAt", 0)))
+        if cands:
+            heir = cands[0]
+            heir.update(role="OWNER", updatedAt=now_ms())
+            store.put("memberships", heir)
+            g["ownerId"] = heir["userId"]
+            store.put("groups", g)
+            add_notification(store, heir["userId"], "SAFETY_NOTICE", "مدیریت گروه به شما رسید",
+                             "مدیر قبلی گروه «%s» حساب خود را حذف کرد و مدیریت به شما واگذار شد." % g.get("title", ""),
+                             g["id"], force=True)
+        else:
+            g["status"] = "ARCHIVED"
+            g["memberCount"] = 0
+            g["updatedAt"] = now_ms()
+            store.put("groups", g)
+
+
+def wipe_account(store, uid):
+    u = store.get("users", uid)
+    if not u:
+        raise ApiError("حساب یافت نشد.")
+    # People who booked this person's slots are told before the slots disappear.
+    for d in store.all("r_slot"):
+        if d.get("ownerId") == uid and d.get("bookedBy") and d["bookedBy"] != uid:
+            add_notification(store, d["bookedBy"], "BOOKING", "نوبت لغو شد",
+                             "متخصص حساب خود را حذف کرد و نوبت «%s» لغو شد." % d.get("when", ""), d["id"])
+    _hand_over_groups(store, uid)
+    my_groups = {m["groupId"] for m in store.all("memberships") if m.get("userId") == uid}
     if u.get("email"):
         remove_cred(u["email"])
         store.delete("resets", _reset_key(u["email"]))
@@ -753,6 +1002,12 @@ def a_deleteAccount(store, uid, args):
     store.delete_where("children", lambda c: c.get("familyUserId") == uid)
     store.delete_where("notifications", lambda n: n.get("userId") == uid)
     store.delete_where("memberships", lambda m: m.get("userId") == uid)
+    for g in store.all("groups"):  # memberCount follows reality
+        if g["id"] in my_groups and g.get("status") != "ARCHIVED":
+            n = sum(1 for m in store.all("memberships") if m.get("groupId") == g["id"] and m.get("status") == "ACTIVE")
+            if g.get("memberCount") != n:
+                g["memberCount"] = n
+                store.put("groups", g)
     my_convs = [c["id"] for c in store.all("conversations") if uid in (c.get("participantIds") or [])]
     store.delete_where("messages", lambda msg: msg.get("conversationId") in my_convs)
     store.delete_where("conversations", lambda c: uid in (c.get("participantIds") or []))
@@ -985,6 +1240,8 @@ def a_approveMember(store, uid, args):
             g["memberCount"] = int(g.get("memberCount", 0)) + 1
             g["updatedAt"] = now_ms()
             store.put("groups", g)
+        add_notification(store, args.get("userId"), "GROUP_JOIN_REQUEST", "عضویت پذیرفته شد",
+                         "درخواست عضویت شما در گروه «%s» پذیرفته شد." % ((g or {}).get("title") or ""), gid)
 
 
 def a_removeMember(store, uid, args):
@@ -999,12 +1256,19 @@ def a_removeMember(store, uid, args):
     was_active = target and target.get("status") == "ACTIVE"
     store.delete_where("memberships",
                        lambda m: m.get("groupId") == gid and m.get("userId") == args.get("userId"))
-    if was_active:
-        g = store.get("groups", gid)
-        if g:
-            g["memberCount"] = max(0, int(g.get("memberCount", 0)) - 1)
-            g["updatedAt"] = now_ms()
-            store.put("groups", g)
+    g = store.get("groups", gid)
+    if was_active and g:
+        g["memberCount"] = max(0, int(g.get("memberCount", 0)) - 1)
+        g["updatedAt"] = now_ms()
+        store.put("groups", g)
+    if target and args.get("userId") != uid:
+        gt = (g or {}).get("title") or ""
+        if was_active:
+            add_notification(store, args.get("userId"), "SAFETY_NOTICE", "حذف از گروه",
+                             "شما از گروه «%s» حذف شدید." % gt, gid, force=True)
+        else:
+            add_notification(store, args.get("userId"), "GROUP_JOIN_REQUEST", "درخواست عضویت رد شد",
+                             "درخواست عضویت شما در گروه «%s» پذیرفته نشد." % gt, gid)
 
 
 def a_createPost(store, uid, args):
@@ -1014,14 +1278,25 @@ def a_createPost(store, uid, args):
         raise ApiError("برای ارسال پست باید عضو فعال گروه باشید.")
     if len(_s(args.get("body"))) < 2:
         raise ApiError("متن پست را بنویسید.")
-    store.put("posts", {
+    reply_to = args.get("replyToPostId")
+    parent = store.get("posts", reply_to) if isinstance(reply_to, str) and reply_to else None
+    if parent and parent.get("groupId") != gid:
+        parent = None
+    doc = {
         "id": new_id("gp"), "groupId": gid, "authorId": uid, "body": _s(args.get("body")),
         "status": "PUBLISHED", "createdAt": now_ms(), "updatedAt": now_ms(),
-    })
+    }
+    if parent:
+        doc["replyToPostId"] = parent["id"]
+    store.put("posts", doc)
     g = store.get("groups", gid)
     if g:
         g["updatedAt"] = now_ms()
         store.put("groups", g)
+    if parent and parent.get("authorId") not in (uid, DELETED_USER_ID) \
+            and parent.get("authorId") not in _blocked_ids(store, uid):
+        add_notification(store, parent["authorId"], "GROUP_REPLY", "پاسخ به پست شما",
+                         "به پست شما در گروه «%s» پاسخ داده شد." % ((g or {}).get("title") or ""), gid)
 
 
 def a_deletePost(store, uid, args):
@@ -1056,6 +1331,8 @@ def a_requestConversation(store, uid, args):
                      and c.get("status") != "DECLINED"), None)
     if existing:
         return {"id": existing["id"]}
+    if not RL.allow("convreq:" + uid, 20, 3600):
+        raise ApiError(TOO_MANY)
     cid = new_id("conv")
     store.put("conversations", {
         "id": cid, "participantIds": [uid, recipient_id], "initiatorId": uid,
@@ -1124,6 +1401,8 @@ def a_sendMessage(store, uid, args):
     if not body:
         raise ApiError("پیام خالی است.")
     other = next(p for p in conv["participantIds"] if p != uid)
+    if _blocked_between(store, uid, other):
+        raise ApiError("امکان ارسال پیام به این کاربر وجود ندارد.")
     store.put("messages", {
         "id": new_id("msg"), "conversationId": conv["id"], "senderId": uid, "body": body,
         "createdAt": now_ms(),
@@ -1179,6 +1458,15 @@ def a_createReport(store, uid, args):
         raise ApiError("گزارش نامعتبر است.")
     if not RL.allow("report:" + uid, 30, 3600):
         raise ApiError(TOO_MANY)
+    coll = {"QUESTION": "questions", "ANSWER": "answers", "GROUP_POST": "posts", "MESSAGE": "messages",
+            "USER": "users", "GUIDE": "guides", "DONATION": "donations"}[ctype]
+    if not store.get(coll, cid):
+        raise ApiError("محتوای گزارش‌شده پیدا نشد.")
+    if ctype == "USER" and cid == uid:
+        raise ApiError("نمی‌توانید خودتان را گزارش کنید.")
+    if any(r.get("reporterId") == uid and r.get("contentType") == ctype and r.get("contentId") == cid
+           and r.get("status") in ("OPEN", "UNDER_REVIEW") for r in store.all("reports")):
+        return {"duplicate": True}
     store.put("reports", {
         "id": new_id("r"), "reporterId": uid, "contentType": ctype,
         "contentId": cid, "reason": _s(args.get("reason"))[:40],
@@ -1203,6 +1491,13 @@ def a_resolveReport(store, uid, args):
     rep["updatedAt"] = now_ms()
     store.put("reports", rep)
     _log_admin(store, uid, "RESOLVE_REPORT", "USER", rep["id"], note)
+    if args.get("hideContent") is True and rep["status"] == "ACTIONED" \
+            and rep.get("contentType") in ("QUESTION", "ANSWER", "GROUP_POST", "GUIDE", "DONATION", "USER"):
+        try:
+            _set_content_status(store, uid, rep["contentType"], rep["contentId"], "HIDDEN", "HIDE_CONTENT",
+                                note or "پنهان‌سازی به‌دنبال رسیدگی به گزارش")
+        except ApiError:
+            pass  # the content is already gone or protected (admin account); the report stays resolved
 
 
 # ---- Notifications ----
@@ -1292,6 +1587,12 @@ def a_reviewVerification(store, uid, args):
     if not req:
         raise ApiError("درخواست یافت نشد.")
     decision = args.get("decision")
+    if decision not in ("VERIFIED", "REJECTED", "MORE_INFO_NEEDED"):
+        raise ApiError("تصمیم نامعتبر است.")
+    latest = _latest_verification(store, req["userId"])
+    if latest and latest["id"] != req["id"]:
+        raise ApiError("این درخواست قدیمی است؛ درخواست جدیدتری از همین کاربر وجود دارد.")
+    was_verified = req.get("status") == "VERIFIED"
     action_type = {"VERIFIED": "VERIFY_PROFESSIONAL", "REJECTED": "REJECT_PROFESSIONAL"}.get(
         decision, "REQUEST_MORE_INFO")
     req["status"] = decision
@@ -1304,17 +1605,68 @@ def a_reviewVerification(store, uid, args):
             p["verificationStatus"] = decision
             p["updatedAt"] = now_ms()
             store.put("professionals", p)
-    if decision == "VERIFIED":  # accounts register as FAMILY; approval grants the professional type
-        tu = store.get("users", req["userId"])
-        if tu and tu.get("accountType") not in PRO_TYPES:
-            tu["accountType"] = req.get("requestedType") or "PROFESSIONAL"
+    tu = store.get("users", req["userId"])
+    if tu and not tu.get("isAdmin"):
+        if decision == "VERIFIED":  # accounts register as FAMILY; approval grants the professional type
+            if tu.get("accountType") not in PRO_TYPES:
+                tu["accountType"] = req.get("requestedType") if req.get("requestedType") in PRO_TYPES else "PROFESSIONAL"
+                tu["updatedAt"] = now_ms()
+                store.put("users", tu)
+        elif was_verified and tu.get("accountType") in PRO_TYPES:  # a verdict reversed: the type goes back
+            tu["accountType"] = "FAMILY"
             tu["updatedAt"] = now_ms()
             store.put("users", tu)
     _log_admin(store, uid, action_type, "USER", req["userId"], reason)
-    label = {"VERIFIED": "تأییدشده", "REJECTED": "ردشده", "PENDING": "در انتظار بررسی",
-             "MORE_INFO_NEEDED": "نیازمند اطلاعات بیشتر", "NONE": "بدون درخواست"}.get(decision, decision)
+    label = {"VERIFIED": "تأییدشده", "REJECTED": "ردشده", "MORE_INFO_NEEDED": "نیازمند اطلاعات بیشتر"}[decision]
     add_notification(store, req["userId"], "VERIFICATION_RESULT", "نتیجهٔ بررسی تخصص",
-                     "وضعیت بررسی تخصص شما به «%s» تغییر کرد." % label)
+                     "وضعیت بررسی تخصص شما به «%s» تغییر کرد. توضیح بررسی‌کننده: %s" % (label, reason[:300]),
+                     req["id"], force=True)
+
+
+def a_adminSetAccountType(store, uid, args):
+    _require(uid)
+    if not is_admin(store, uid):
+        raise ApiError("دسترسی مدیر لازم است.")
+    reason = _s(args.get("reason"))
+    if not reason:
+        raise ApiError("ثبت دلیل تصمیم الزامی است.")
+    atype = args.get("accountType")
+    if atype not in ROLES:
+        raise ApiError("نوع حساب نامعتبر است.")
+    target = store.get("users", args.get("userId"))
+    if not target:
+        raise ApiError("کاربر یافت نشد.")
+    if target.get("isAdmin"):
+        raise ApiError("نوع حساب مدیر تغییر نمی‌کند.")
+    target["accountType"] = atype
+    target["updatedAt"] = now_ms()
+    store.put("users", target)
+    for pr in store.all("professionals"):
+        if pr.get("userId") == target["id"]:
+            pr["verificationStatus"] = "VERIFIED" if atype in PRO_TYPES else "NONE"
+            pr["updatedAt"] = now_ms()
+            store.put("professionals", pr)
+    _log_admin(store, uid, "SET_ACCOUNT_TYPE", "USER", target["id"], reason + " [→ %s]" % atype)
+    add_notification(store, target["id"], "VERIFICATION_RESULT", "تغییر نوع حساب",
+                     "نوع حساب شما توسط مدیریت تغییر کرد. توضیح: %s" % reason[:300], target["id"], force=True)
+
+
+def _apply_account_status(store, target, status):
+    """Single place that changes a user's status so every path revokes sessions the same way."""
+    prev = target.get("status")
+    target["status"] = status
+    target["updatedAt"] = now_ms()
+    if status == "BLOCKED" or (prev == "BLOCKED" and status != "BLOCKED"):
+        # Old tokens must not revive when the account is later restored.
+        target["tokensValidAfter"] = int(time.time()) + 1
+    store.put("users", target)
+    if status == "BLOCKED":
+        store.delete_where("pushTokens", lambda t: t.get("userId") == target["id"])
+    elif prev != status:
+        msg = {"LIMITED": "حساب شما توسط مدیریت محدود شد و فقط امکان مشاهده دارید.",
+               "ACTIVE": "محدودیت حساب شما برداشته شد."}.get(status)
+        if msg:
+            add_notification(store, target["id"], "SAFETY_NOTICE", "وضعیت حساب", msg, force=True)
 
 
 def _set_content_status(store, uid, ctype, cid, status, action, reason):
@@ -1326,15 +1678,17 @@ def _set_content_status(store, uid, ctype, cid, status, action, reason):
             "GUIDE": "guides", "DONATION": "donations"}.get(ctype)
     if coll:
         doc = store.get(coll, cid)
-        if doc:
-            doc["status"] = status
-            store.put(coll, doc)
+        if not doc:
+            raise ApiError("محتوا یافت نشد.")
+        doc["status"] = status
+        store.put(coll, doc)
     elif ctype == "USER":  # hide -> limit the account, delete -> block it (never touches admins)
         tu = store.get("users", cid)
-        if tu and not tu.get("isAdmin"):
-            tu["status"] = "LIMITED" if status == "HIDDEN" else "BLOCKED"
-            tu["updatedAt"] = now_ms()
-            store.put("users", tu)
+        if not tu:
+            raise ApiError("کاربر یافت نشد.")
+        if tu.get("isAdmin"):
+            raise ApiError("وضعیت حساب مدیر تغییر نمی‌کند.")
+        _apply_account_status(store, tu, "LIMITED" if status == "HIDDEN" else "BLOCKED")
     else:
         raise ApiError("نوع محتوا نامعتبر است.")
     _log_admin(store, uid, action, ctype, cid, _s(reason))
@@ -1363,12 +1717,11 @@ def a_setAccountStatus(store, uid, args):
     if status not in ("ACTIVE", "LIMITED", "BLOCKED", "PENDING_REVIEW"):
         raise ApiError("وضعیت حساب نامعتبر است.")
     target = store.get("users", args.get("userId"))
-    if target and target.get("isAdmin") and status != "ACTIVE":
+    if not target:
+        raise ApiError("کاربر یافت نشد.")
+    if target.get("isAdmin") and status != "ACTIVE":
         raise ApiError("وضعیت حساب مدیر تغییر نمی‌کند.")
-    if target:
-        target["status"] = status
-        target["updatedAt"] = now_ms()
-        store.put("users", target)
+    _apply_account_status(store, target, status)
     action = "BLOCK_ACCOUNT" if status == "BLOCKED" else ("RESTORE_ACCOUNT" if status == "ACTIVE" else "LIMIT_ACCOUNT")
     _log_admin(store, uid, action, "USER", args.get("userId"), reason)
 
@@ -1636,11 +1989,37 @@ def _rec_kind(args):
     return kind, REC_KINDS[kind]
 
 
+def _slot_epoch(d):
+    try:
+        return int(d.get("epochMs") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _parse_epoch(v):
+    if v is None or v == "":
+        return 0
+    if isinstance(v, bool):
+        raise ApiError("زمان نوبت نامعتبر است.")
+    if isinstance(v, str):
+        v = v.strip()
+        if not v.isdigit():
+            raise ApiError("زمان نوبت نامعتبر است.")
+    try:
+        n = int(float(v))
+    except (TypeError, ValueError):
+        raise ApiError("زمان نوبت نامعتبر است.")
+    if n < 0 or n > 4102444800000:  # up to year 2100
+        raise ApiError("زمان نوبت نامعتبر است.")
+    return n
+
+
 def _rec_view(store, d, uid, kind):
     out = {k: d.get(k, "") for k in REC_KINDS[kind]["fields"]}
     out.update(id=d["id"], ownerId=d.get("ownerId"), ownerName=d.get("ownerName", ""),
                createdAt=d.get("createdAt", 0), mine=d.get("ownerId") == uid)
     if kind == "slot":
+        out["epochMs"] = _slot_epoch(d)
         out["status"] = d.get("status", "OPEN")
         out["iBooked"] = d.get("bookedBy") == uid
         if d.get("ownerId") == uid:
@@ -1655,6 +2034,8 @@ def a_recList(store, uid, args):
     mine, booked = bool(args.get("mine")), bool(args.get("booked"))
     child = _s(args.get("childId")) if isinstance(args.get("childId"), str) else ""
     items = []
+    hidden_owners = _blocked_ids(store, uid) if kind == "slot" else set()
+    now = now_ms()
     for d in store.all("r_" + kind):
         if d.get("status") == "REMOVED":
             continue
@@ -1670,10 +2051,17 @@ def a_recList(store, uid, args):
                 continue
             if not booked and not mine and d.get("status") == "BOOKED":
                 continue
+            if not booked and not own:  # open lists: no past slots, no blocked owners
+                ep = _slot_epoch(d)
+                if (ep and ep < now) or d.get("ownerId") in hidden_owners:
+                    continue
         elif mine and not own:
             continue
         items.append(d)
-    items.sort(key=lambda d: d.get("createdAt", 0), reverse=True)
+    if kind == "slot":
+        items.sort(key=lambda d: (_slot_epoch(d) or float("inf"), -d.get("createdAt", 0)))
+    else:
+        items.sort(key=lambda d: d.get("createdAt", 0), reverse=True)
     return {"items": [_rec_view(store, d, uid, kind) for d in items[:spec.get("limit", 200)]]}
 
 
@@ -1783,13 +2171,21 @@ def a_recSave(store, uid, args):
     if d and d.get("ownerId") != uid and not admin:
         raise ApiError("اجازهٔ ویرایش ندارید.")
     owner = d["ownerId"] if d else uid
+    if kind == "slot" and d and d.get("status") == "BOOKED":
+        raise ApiError("نوبت رزروشده قابل ویرایش نیست؛ ابتدا آن را لغو کنید.")
     clean = _clean_rec(store, owner, spec, data)
+    if kind == "slot":
+        epoch = _parse_epoch(data.get("epochMs")) if "epochMs" in data else (_slot_epoch(d) if d else 0)
+        if epoch and epoch < now_ms() and (not d or epoch != _slot_epoch(d)):
+            raise ApiError("زمان نوبت باید در آینده باشد.")
     new_files = _rec_file_ids(spec, clean)
     if spec["scope"] == "own" or new_files:
         _check_file_ownership(store, owner, new_files, admin=admin and owner != uid)
     if d:
         gone = set(_rec_file_ids(spec, d)) - set(new_files)
         d.update(clean)
+        if kind == "slot":
+            d["epochMs"] = epoch
         d["updatedAt"] = now_ms()
         for fid in gone:  # files always belong to the record's OWNER, also when an admin edits
             _drop_file(store, owner, fid)
@@ -1798,6 +2194,8 @@ def a_recSave(store, uid, args):
             raise ApiError("به سقف تعداد رسیدید.")
         d = dict(clean, id=new_id("r"), ownerId=uid, ownerName=me.get("displayName", ""),
                  status="OPEN" if kind == "slot" else "ACTIVE", createdAt=now_ms(), updatedAt=now_ms())
+        if kind == "slot":
+            d["epochMs"] = epoch
     store.put("r_" + kind, d)
     return {"id": d["id"]}
 
@@ -1828,11 +2226,23 @@ def a_slotBook(store, uid, args):
     d = _slot(store, args)
     me = store.get("users", uid) or {}
     if d.get("ownerId") == uid:
-        raise ApiError("نوبت خودتان را نمی‌توانید رزرو کنید.")
+        raise ApiError("نمی‌توانید نوبت خودتان را رزرو کنید.")
     if me.get("status") in ("BLOCKED", "LIMITED"):
         raise ApiError("حساب شما اجازهٔ رزرو ندارد.")
     if d.get("status") != "OPEN":
         raise ApiError("این نوبت قبلاً رزرو شده است.")
+    owner = store.get("users", d["ownerId"]) or {}
+    if owner.get("accountType") not in PRO_TYPES or owner.get("status") in ("BLOCKED", "LIMITED", "DELETED"):
+        raise ApiError("این متخصص در حال حاضر نوبت نمی‌پذیرد.")
+    if _blocked_between(store, uid, d["ownerId"]):
+        raise ApiError("امکان رزرو با این متخصص وجود ندارد.")
+    ep, now = _slot_epoch(d), now_ms()
+    if ep and ep < now:
+        raise ApiError("زمان این نوبت گذشته است.")
+    active = sum(1 for x in store.all("r_slot") if x.get("bookedBy") == uid and x.get("ownerId") == d["ownerId"]
+                 and x.get("status") == "BOOKED" and (not _slot_epoch(x) or _slot_epoch(x) >= now))
+    if active >= 2:
+        raise ApiError("حداکثر ۲ نوبت فعال نزد هر متخصص می‌توانید داشته باشید.")
     d.update(status="BOOKED", bookedBy=uid, bookedByName=me.get("displayName", ""), updatedAt=now_ms())
     store.put("r_slot", d)
     add_notification(store, d["ownerId"], "BOOKING", "نوبت جدید رزرو شد",
@@ -1859,6 +2269,7 @@ def a_search(store, uid, args):
     if len(q) < 2:
         raise ApiError("حداقل دو نویسه وارد کنید.")
     off = blocked_modules(store, uid)
+    hidden = _blocked_ids(store, uid)
     out = []
 
     def hit(*parts):
@@ -1882,7 +2293,7 @@ def a_search(store, uid, args):
                 add("guide", d, d.get("title", ""), "راهنما")
     if "directory" not in off:
         for d in store.all("users"):
-            if d.get("accountType") in PRO_TYPES and d.get("status") not in ("BLOCKED",) and hit(d.get("displayName"), d.get("city"), d.get("bio")):
+            if d.get("accountType") in PRO_TYPES and d.get("status") not in ("BLOCKED",) and d["id"] not in hidden and hit(d.get("displayName"), d.get("city"), d.get("bio")):
                 add("user", d, d.get("displayName", ""), "متخصص" + (" · " + d["city"] if d.get("city") else ""))
     if "donations" not in off:
         for d in store.all("donations"):
@@ -2092,6 +2503,9 @@ def a_adminIssueReset(store, uid, args):
         raise ApiError("بازنشانی رمز مدیر دیگر از این مسیر ممکن نیست.")
     code = _issue_reset(store, target["email"], target["id"])
     _log_admin(store, uid, "ISSUE_RESET", "USER", target["id"], "صدور کد بازیابی رمز")
+    add_notification(store, target["id"], "SAFETY_NOTICE", "کد بازیابی رمز صادر شد",
+                     "مدیریت برای حساب شما کد بازیابی رمز صادر کرد. اگر این درخواست از شما نبوده، به پشتیبانی اطلاع دهید.",
+                     force=True)
     return {"code": code, "email": target["email"], "expiresInMinutes": RESET_TTL_MS // 60000}
 
 
@@ -2146,6 +2560,8 @@ def a_adminStats(store, uid, args):
         },
         "records": {k: sum(1 for d in store.all("r_" + k) if d.get("status") != "REMOVED") for k in REC_KINDS},
         "files": {"count": len(files), "bytes": sum(int(f.get("size", 0) or 0) for f in files)},
+        "moduleRoles": module_roles(store),
+        "disabledFeatures": disabled_features(store),
         "smtpConfigured": smtp_configured(),
         "generatedAt": now,
     }
@@ -2189,11 +2605,12 @@ def a_adminBroadcast(store, uid, args):
     tokens = {}
     for t in store.all("pushTokens"):
         tokens.setdefault(t.get("userId"), []).append(t["id"])
-    sent, pairs = 0, []
-    for u in list(store.all("users"))[:5000]:
-        if u.get("status") in ("BLOCKED", "DELETED") or (audience != "ALL" and u.get("accountType") != audience):
+    sent, skipped, pairs = 0, 0, []
+    for u in list(store.all("users")):  # safety notices ignore the user's opt-out and are never capped
+        if audience != "ALL" and u.get("accountType") != audience:
             continue
-        if (u.get("notificationSettings") or {}).get("safetyNotice", True) is False:
+        if u.get("status") in ("BLOCKED", "DELETED"):
+            skipped += 1
             continue
         nid = new_id("n")
         store.put("notifications", {"id": nid, "userId": u["id"], "type": "SAFETY_NOTICE", "title": title,
@@ -2202,7 +2619,7 @@ def a_adminBroadcast(store, uid, args):
         sent += 1
     _fcm_fanout(pairs, title, body, "SAFETY_NOTICE", "")
     _log_admin(store, uid, "BROADCAST", "USER", audience, title)
-    return {"sent": sent}
+    return {"sent": sent, "devices": len(pairs), "skipped": skipped}
 
 
 # ---- Sharing a child's file with another person (teacher, therapist, spouse) ----------------
@@ -2279,7 +2696,11 @@ def a_shareRevoke(store, uid, args):
     sh = store.get("shares", _s(args.get("id")))
     if not sh or uid not in (sh.get("ownerId"), sh.get("redeemedBy")):
         raise ApiError("اشتراک پیدا نشد.")
-    store.delete("shares", sh["id"])  # the code and any access derived from it die immediately
+    if uid == sh.get("ownerId"):
+        store.delete("shares", sh["id"])  # the code and any access derived from it die immediately
+    else:  # a recipient only gives up their own access; the owner keeps the record (status REVOKED)
+        sh.update(revoked=True, revokedBy=uid)
+        store.put("shares", sh)
 
 
 def a_shareRedeem(store, uid, args):
@@ -2484,8 +2905,88 @@ def _sweeper_loop():
         time.sleep(24 * 3600)
 
 
+# ---- Signed file URLs -------------------------------------------------------------------------
+# GET /api/files/<id> is accepted with a valid ?exp&sig, or a Bearer of a user allowed to read the
+# file, or (only while FILES_ENFORCE is off, for 0.13 clients) as a bare capability URL.
+
+FILES_ENFORCE = os.environ.get("FILES_ENFORCE", "").strip().lower() in ("1", "true", "yes", "on")
+FILE_URL_TTL = 24 * 3600
+FILE_LINK_BAD = "پیوند فایل منقضی یا نامعتبر است."
+
+
+def _file_sig(fid, exp):
+    return hmac.new(JWT_SECRET, ("file|%s|%d" % (fid, exp)).encode("ascii"), hashlib.sha256).hexdigest()[:32]
+
+
+def sign_file(fid, exp=None):
+    """-> (relative signed url, exp unix seconds)."""
+    exp = int(exp if exp is not None else time.time() + FILE_URL_TTL)
+    return "files/%s?exp=%d&sig=%s" % (fid, exp, _file_sig(fid, exp)), exp
+
+
+def file_sig_ok(fid, exp, sig):
+    try:
+        exp = int(exp)
+    except (TypeError, ValueError):
+        return False
+    return exp > time.time() and isinstance(sig, str) and hmac.compare_digest(sig, _file_sig(fid, exp))
+
+
+def _readable_file_ids(store, uid):
+    """Files the caller may read besides their own: avatars, donation photos, curated content,
+    and records of children shared with them through a live share."""
+    out = set()
+    for u in store.all("users"):
+        if u.get("photoId"):
+            out.add(u["photoId"])
+        m = re.search(r"files/([0-9a-f]{32})$", str(u.get("photoUrl") or ""))
+        if m:
+            out.add(m.group(1))
+    for d in store.all("donations"):
+        if d.get("status") not in ("REMOVED", "HIDDEN"):
+            out.update(x for x in d.get("imageIds") or [] if isinstance(x, str))
+    for pr in store.all("professionals"):
+        if pr.get("photoId") and (pr.get("userId") == uid or pr.get("verificationStatus") == "VERIFIED"):
+            out.add(pr["photoId"])
+    for kind, spec in REC_KINDS.items():
+        for d in store.all("r_" + kind):
+            if spec["scope"] != "own" or d.get("ownerId") == uid:
+                out.update(_rec_file_ids(spec, d))
+    for sh in store.all("shares"):
+        if sh.get("redeemedBy") == uid and _share_live(sh):
+            for k, items in _child_records(store, sh["ownerId"], sh["childId"], sh["kinds"]).items():
+                for d in items:
+                    out.update(_rec_file_ids(REC_KINDS[k], d))
+    for v in store.all("verifications"):
+        if v.get("userId") == uid:
+            out.update(v.get("documentRefs") or [])
+    return out
+
+
+def a_fileUrls(store, uid, args):
+    _require(uid)
+    ids = args.get("ids")
+    if not isinstance(ids, list) or len(ids) > 100:
+        raise ApiError("فهرست فایل‌ها نامعتبر است.")
+    admin = is_admin(store, uid)
+    readable = None
+    exp = int(time.time() + FILE_URL_TTL)
+    urls = {}
+    for fid in dict.fromkeys(i for i in ids if isinstance(i, str) and HEX32.fullmatch(i) and i != ZERO_ID):
+        doc = store.get("files", fid)
+        if not doc:
+            continue
+        if not (admin or doc.get("ownerId") == uid):
+            if readable is None:
+                readable = _readable_file_ids(store, uid)
+            if fid not in readable:
+                continue
+        urls[fid] = sign_file(fid, exp)[0]
+    return {"urls": urls, "expiresAt": exp * 1000}
+
+
 LIGHT_PREFIXES = ("a_donation", "a_rec", "a_slot", "a_search", "a_share", "a_admin", "a_state")
-LIGHT_ACTIONS = {n[2:] for n in list(globals()) if n.startswith(LIGHT_PREFIXES)}
+LIGHT_ACTIONS = {n[2:] for n in list(globals()) if n.startswith(LIGHT_PREFIXES)} | {"exportMyData", "fileUrls", "changePassword"}
 
 
 ACTIONS = {name[2:]: fn for name, fn in list(globals().items())
@@ -2514,19 +3015,30 @@ def build_state(store, uid):
                 pu["bio"] = None
         return pu
 
-    users = [public_user(u) for u in store.all("users")]
-    professionals = list(store.all("professionals"))
+    all_users = list(store.all("users"))
+    blocked_me = {u["id"] for u in all_users if uid in (u.get("blockedUserIds") or [])}
+    users_by_id = {u["id"]: u for u in all_users}
+    professionals = []
+    for pr in store.all("professionals"):
+        if admin or pr.get("userId") == uid:
+            professionals.append(pr)
+        elif pr.get("verificationStatus") == "VERIFIED" and pr.get("userId") not in blocked_me:
+            owner_priv = (users_by_id.get(pr.get("userId")) or {}).get("privacy") or {}
+            professionals.append(pr if owner_priv.get("showCity", False) else dict(pr, city=None))
 
     # Questions/answers/posts/guides: PUBLISHED for everyone; author sees own; admin sees all.
     def visible_content(doc, author_field="authorId"):
         return (doc.get("status") == "PUBLISHED" or doc.get(author_field) == uid or admin)
 
+    def not_blocked(doc):
+        return admin or doc.get("authorId") not in blocked_me
+
     questions = [dict(q, authorId="") if q.get("isAnonymous") and q.get("authorId") != uid and not admin else q
                  for q in store.all("questions")
-                 if q.get("status") != "REMOVED" and visible_content(q)]
+                 if q.get("status") != "REMOVED" and visible_content(q) and not_blocked(q)]
     q_ids = {q["id"] for q in questions}
     answers = [a for a in store.all("answers")
-               if a.get("status") != "REMOVED" and visible_content(a)]
+               if a.get("status") != "REMOVED" and visible_content(a) and not_blocked(a)]
     guides = [g for g in store.all("guides")
               if g.get("status") == "PUBLISHED" or admin]
 
@@ -2534,7 +3046,8 @@ def build_state(store, uid):
     my_group_ids = {m["groupId"] for m in store.all("memberships")
                     if m.get("userId") == uid and m.get("status") != "REMOVED"}
     groups = [g for g in store.all("groups")
-              if g.get("visibility") == "PUBLIC" or g["id"] in my_group_ids or admin]
+              if admin or g["id"] in my_group_ids
+              or (g.get("visibility") == "PUBLIC" and g.get("status") != "ARCHIVED")]
     visible_group_ids = {g["id"] for g in groups}
 
     # Memberships: of groups I can see (so member lists / my requests resolve).
@@ -2549,7 +3062,7 @@ def build_state(store, uid):
         if g.get("visibility") == "PRIVATE" and not is_active_member(store, g["id"], uid) and not admin:
             return False
         return p.get("status") == "PUBLISHED"
-    posts = [p for p in store.all("posts") if post_visible(p)]
+    posts = [p for p in store.all("posts") if post_visible(p) and not_blocked(p)]
 
     # Conversations & messages: mine only.
     conversations = [c for c in store.all("conversations")
@@ -2560,20 +3073,40 @@ def build_state(store, uid):
     notifications = [n for n in store.all("notifications") if n.get("userId") == uid]
 
     # Verifications: own + all if admin. Children: own only.
-    verifications = [v for v in store.all("verifications")
-                     if v.get("userId") == uid or admin]
+    if admin:  # the review queue holds only each user's latest request
+        latest = {}
+        for v in store.all("verifications"):
+            cur = latest.get(v.get("userId"))
+            if not cur or (v.get("createdAt", 0), v.get("updatedAt", 0)) >= (cur.get("createdAt", 0), cur.get("updatedAt", 0)):
+                latest[v.get("userId")] = v
+        verifications = list(latest.values())
+    else:
+        verifications = [v for v in store.all("verifications") if v.get("userId") == uid]
     children = [c for c in store.all("children") if c.get("familyUserId") == uid]
 
     # Reports & admin actions: admin only.
     reports = list(store.all("reports")) if admin else []
     admin_actions = list(store.all("adminActions")) if admin else []
+    audit_log = sorted(store.all("adminAudit"), key=lambda a: a.get("createdAt", 0), reverse=True)[:200] if admin else []
+
+    # Users: only people the caller can meet (self, admins, verified pros, content authors, group
+    # members, conversation partners, people they blocked); admins see everyone.
+    wanted = {uid} | {x for x in (users_by_id.get(uid) or {}).get("blockedUserIds") or []}
+    wanted |= {u["id"] for u in all_users if u.get("isAdmin")}
+    wanted |= {pr.get("userId") for pr in professionals}
+    wanted |= {q.get("authorId") for q in questions} | {a.get("authorId") for a in answers}
+    wanted |= {p.get("authorId") for p in posts} | {m.get("userId") for m in memberships}
+    wanted |= {g.get("ownerId") for g in groups}
+    wanted |= {pid for c in conversations for pid in c.get("participantIds") or []}
+    wanted -= blocked_me
+    users = [public_user(u) for u in all_users if admin or u["id"] in wanted]
 
     return {
         "users": users, "professionals": professionals, "verifications": verifications,
         "children": children, "questions": questions, "answers": answers, "groups": groups,
         "memberships": memberships, "posts": posts, "conversations": conversations,
         "messages": messages, "guides": guides, "reports": reports,
-        "notifications": notifications, "adminActions": admin_actions,
+        "notifications": notifications, "adminActions": admin_actions, "auditLog": audit_log,
     }
 
 
@@ -2703,7 +3236,7 @@ def save_upload(store, uid, mime, data, name):
         os.replace(path + ".part", path)
         store.put("files", {"id": fid, "ownerId": uid, "mime": mime, "size": len(data),
                             "name": _s(name)[:120], "createdAt": now_ms()})
-    return {"id": fid, "url": "files/%s" % fid, "mime": mime, "size": len(data)}
+    return {"id": fid, "url": "files/%s" % fid, "signedUrl": sign_file(fid)[0], "mime": mime, "size": len(data)}
 
 
 TTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tts")
@@ -2793,7 +3326,7 @@ def clean_tts_text(text):
 GENERIC_ERROR = "خطای داخلی سرور. کمی بعد دوباره تلاش کنید."
 MAX_BODY = 1024 * 1024
 READ_ONLY_ACTIONS = {"recList", "donationList", "donationGet", "search", "shareList", "shareView",
-                     "adminStats", "adminListUsers", "state", "exportMyData"}
+                     "adminStats", "adminListUsers", "state", "exportMyData", "fileUrls"}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -2901,6 +3434,20 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             self._fail("POST " + self.path.split("?")[0])
 
+    def _file_allowed(self, store, fid, doc, query):
+        if not doc:
+            return True  # 404 follows; nothing to protect
+        if file_sig_ok(fid, query.get("exp"), query.get("sig")):
+            return True
+        uid = self._uid()
+        if uid:
+            u = store.get("users", uid) or {}
+            if u.get("isAdmin") or doc.get("ownerId") == uid or fid in _readable_file_ids(store, uid):
+                return True
+        if "sig" in query or "exp" in query:
+            return False  # a signed URL that fails is rejected even while legacy URLs are tolerated
+        return not FILES_ENFORCE
+
     def _get(self):
         path = self.path.split("?")[0].rstrip("/")
         query = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).items()}
@@ -2908,7 +3455,10 @@ class Handler(BaseHTTPRequestHandler):
             fid = path.rsplit("/", 1)[-1]
             if not HEX32.fullmatch(fid):
                 return self._send(404, {"ok": False, "error": "یافت نشد."})
-            doc = Store().get("files", fid)
+            store = Store()
+            doc = store.get("files", fid)
+            if not self._file_allowed(store, fid, doc, query):
+                return self._send(403, {"ok": False, "error": FILE_LINK_BAD})
             ext = UPLOAD_TYPES.get(doc["mime"]) if doc else None
             fpath = os.path.join(UPLOAD_DIR, "%s.%s" % (fid, ext)) if ext else None
             if not fpath or not os.path.exists(fpath):
@@ -3025,10 +3575,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": False, "error": "این بخش برای شما فعال نیست."})
             if name in READ_ONLY_ACTIONS:
                 store = Store()
+                _require_active(store, uid, name)
                 data = fn(store, uid, a)
             else:
                 with MUT_LOCK:  # one writer at a time; a fresh Store inside the lock avoids stale reads
                     store = Store()
+                    _require_active(store, uid, name)
                     data = fn(store, uid, a)
             resp = {"ok": True}
             if data:

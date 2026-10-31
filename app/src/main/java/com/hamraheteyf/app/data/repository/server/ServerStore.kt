@@ -10,6 +10,7 @@ import com.hamraheteyf.app.net.AuthResponse
 import com.hamraheteyf.app.net.HamrahApi
 import com.hamraheteyf.app.net.StateFetch
 import com.hamraheteyf.app.ui.common.ImageDiskCache
+import com.hamraheteyf.app.ui.modules.RecClient
 import com.hamraheteyf.app.ui.modules.EmergencyCache
 import com.hamraheteyf.app.ui.modules.Reminders
 import com.hamraheteyf.app.ui.modules.SpeechCache
@@ -41,6 +42,7 @@ import java.io.File
 const val SERVER_NOT_SIGNED_IN = "ابتدا وارد حساب خود شوید."
 private const val POLL_INTERVAL_MS = 30_000L
 private const val MIN_REFRESH_GAP_MS = 2_000L
+private const val RECONCILE_GAP_MS = 5 * 60_000L
 private const val STATE_CACHE_FILE = "state_cache.json"
 
 /** Per-user prefs wiped on sign-out (progress ticks, AAC boards). Auth/vault/onboarding/dismissed banners are deliberately kept. */
@@ -212,6 +214,7 @@ class ServerStore(val api: HamrahApi, private val context: android.content.Conte
         runCatching { Reminders.clearAll(appContext) }
         runCatching { SpeechCache.clear(appContext) }
         runCatching { ImageDiskCache.clear(appContext) }
+        runCatching { com.hamraheteyf.app.net.FileUrls.clear() }
         runCatching { EmergencyCache.onSignOut(appContext) }
         runCatching { com.hamraheteyf.app.ui.navigation.FeatureFlags.update(appContext, emptySet()) }
         runCatching {
@@ -235,8 +238,15 @@ class ServerStore(val api: HamrahApi, private val context: android.content.Conte
         poller = scope.launch {
             AppForeground.isForeground.collectLatest { fg ->
                 if (!fg) return@collectLatest
+                var lastReconcile = 0L
                 while (isActive && api.token != null) {
                     refresh(force = false)
+                    val t = System.currentTimeMillis()
+                    if (t - lastReconcile >= RECONCILE_GAP_MS) {
+                        lastReconcile = t
+                        runCatching { Reminders.reconcileAppointments(appContext, RecClient(api)) }
+                        if (api.token == null) runCatching { Reminders.clearAll(appContext) }  // signed out mid-flight
+                    }
                     delay(POLL_INTERVAL_MS)
                 }
             }

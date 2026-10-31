@@ -29,6 +29,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import com.hamraheteyf.app.net.FileUrls
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -83,15 +84,15 @@ object ImageDiskCache {
     fun clear(ctx: Context) { runCatching { dir(ctx).listFiles()?.forEach { it.delete() } }; ImageCache.evictAll() }
 }
 
-private class Fetched(val bytes: ByteArray?, val retryable: Boolean)
+private class Fetched(val bytes: ByteArray?, val retryable: Boolean, val code: Int = 0)
 
 private fun fetchBytes(url: String): Fetched = try {
     val c = URL(url).openConnection() as HttpURLConnection
     try {
         c.connectTimeout = 15000; c.readTimeout = 30000
         val code = c.responseCode
-        if (code in 200..299) Fetched(c.inputStream.use { it.readBytes() }, false)
-        else Fetched(null, code >= 500 || code == 408 || code == 429)
+        if (code in 200..299) Fetched(c.inputStream.use { it.readBytes() }, false, code)
+        else Fetched(null, code >= 500 || code == 408 || code == 429, code)
     } finally { c.disconnect() }
 } catch (_: Exception) { Fetched(null, true) }
 
@@ -99,15 +100,31 @@ private val RETRY_DELAYS_MS = longArrayOf(0, 1000, 3000)
 
 /** Memory → disk → network (3 attempts with back-off). Null means it failed. */
 private suspend fun loadBitmap(ctx: Context, url: String): Bitmap? = withContext(Dispatchers.IO) {
-    ImageDiskCache.get(ctx, url)?.let { b -> decodeSampled(b, 900)?.let { return@withContext it } }
+    val key = FileUrls.cacheKey(url)
+    ImageDiskCache.get(ctx, key)?.let { b -> decodeSampled(b, 900)?.let { return@withContext it } }
+    var resigned = false
     for (d in RETRY_DELAYS_MS) {
         if (d > 0) delay(d)
-        val r = fetchBytes(url)
+        val r = fetchBytes(FileUrls.resolveUrl(url))
         val bytes = r.bytes
         if (bytes != null) {
             val bmp = decodeSampled(bytes, 900) ?: return@withContext null
-            ImageDiskCache.put(ctx, url, bytes)
+            ImageDiskCache.put(ctx, key, bytes)
             return@withContext bmp
+        }
+        // Expired / rejected signature: fetch a fresh signed URL once and try again straight away.
+        if ((r.code == 401 || r.code == 403) && !resigned && FileUrls.idOf(url) != null) {
+            resigned = true
+            FileUrls.resolveUrl(url, force = true)
+            val again = fetchBytes(FileUrls.resolveUrl(url))
+            val b2 = again.bytes
+            if (b2 != null) {
+                val bmp = decodeSampled(b2, 900) ?: return@withContext null
+                ImageDiskCache.put(ctx, key, b2)
+                return@withContext bmp
+            }
+            if (!again.retryable) break
+            continue
         }
         if (!r.retryable) break
     }
@@ -118,14 +135,15 @@ private suspend fun loadBitmap(ctx: Context, url: String): Bitmap? = withContext
 @Composable
 fun RemoteImage(url: String, modifier: Modifier = Modifier, contentScale: ContentScale = ContentScale.Crop, contentDescription: String? = null) {
     val ctx = LocalContext.current.applicationContext
-    var bmp by remember(url) { mutableStateOf(ImageCache.get(url)) }
-    var failed by remember(url) { mutableStateOf(false) }
-    var attempt by remember(url) { mutableIntStateOf(0) }
-    LaunchedEffect(url, attempt) {
+    val key = FileUrls.cacheKey(url)  // a re-signed URL for the same file must not reload the image
+    var bmp by remember(key) { mutableStateOf(ImageCache.get(key)) }
+    var failed by remember(key) { mutableStateOf(false) }
+    var attempt by remember(key) { mutableIntStateOf(0) }
+    LaunchedEffect(key, attempt) {
         if (bmp == null) {
             failed = false
             val loaded = loadBitmap(ctx, url)
-            if (loaded != null) { ImageCache.put(url, loaded); bmp = loaded } else failed = true
+            if (loaded != null) { ImageCache.put(key, loaded); bmp = loaded } else failed = true
         }
     }
     val b = bmp

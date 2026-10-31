@@ -29,6 +29,7 @@ import com.hamraheteyf.app.BuildConfig
 import com.hamraheteyf.app.net.ApiResult
 import com.hamraheteyf.app.ui.admin.PlatformCall
 import com.hamraheteyf.app.ui.admin.rememberPlatformCall
+import com.hamraheteyf.app.data.model.canRequestVerification
 import com.hamraheteyf.app.ui.common.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -310,6 +311,9 @@ fun SharesReceivedScreen(onBack: () -> Unit, onOpen: (String) -> Unit) {
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var tick by remember { mutableIntStateOf(0) }
+    var removing by remember { mutableStateOf<ReceivedShare?>(null) }
+    val me = rememberMe()
+    val proAllowed = me == null || me.isAdmin || me.accountType.canRequestVerification()
 
     LaunchedEffect(call, tick) {
         when (val r = call?.call("shareList") ?: return@LaunchedEffect) {
@@ -319,7 +323,32 @@ fun SharesReceivedScreen(onBack: () -> Unit, onOpen: (String) -> Unit) {
         }
     }
 
+    removing?.let { rs ->
+        AlertDialog(
+            onDismissRequest = { removing = null },
+            title = { Text("حذف دسترسی") },
+            text = { Text("دسترسی شما به پروندهٔ «${rs.childName.ifBlank { "کودک" }}» برداشته می‌شود. برای دسترسی دوباره، خانواده باید کد جدید بدهد.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    removing = null
+                    scope.launch {
+                        when (val r = call?.call("shareRevoke", buildJsonObject { put("id", rs.id) })) {
+                            is ApiResult.Fail -> error = r.message
+                            else -> error = null
+                        }
+                        tick++
+                    }
+                }) { Text("حذف دسترسی", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { removing = null }) { Text("انصراف") } },
+        )
+    }
+
     Scaffold(topBar = { ScreenHeader("اشتراک‌های دریافتی", onBack = onBack) }) { pad ->
+        if (!proAllowed) {
+            EmptyState("دریافت پروندهٔ اشتراکی فقط برای حساب‌های متخصص است.", Modifier.padding(pad))
+            return@Scaffold
+        }
         Column(Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
             InfoBanner("اگر خانواده‌ای کد اشتراک پروندهٔ کودکش را به شما داده، آن را اینجا وارد کنید. دسترسی فقط خواندنی و موقت است.", dismissKey = "shares_received_info")
             Spacer(Modifier.height(12.dp))
@@ -356,6 +385,7 @@ fun SharesReceivedScreen(onBack: () -> Unit, onOpen: (String) -> Unit) {
                                 if (left > 0) "${left.toPersianDigits()} روز مانده" else "منقضی شده",
                             style = MaterialTheme.typography.bodySmall, color = mutedColor(),
                         )
+                        TextButton(onClick = { removing = s }) { Text("حذف دسترسی من") }
                     }
                 }
             }

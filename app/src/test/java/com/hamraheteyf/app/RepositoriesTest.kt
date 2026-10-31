@@ -40,13 +40,13 @@ class RepositoriesTest {
     )
 
     private suspend fun Fixture.loginFamily1() {
-        assertTrue(auth.login(SeedData.EMAIL_FAMILY1, FakeStore.DEMO_PASSWORD) is DataResult.Success)
+        assertTrue(auth.login(SeedData.EMAIL_FAMILY1, SeedData.DEMO_PASSWORD) is DataResult.Success)
     }
 
     @Test
     fun login_succeeds_with_correct_credentials() = runTest {
         val f = fixture()
-        val result = f.auth.login(SeedData.EMAIL_ADMIN, FakeStore.DEMO_PASSWORD)
+        val result = f.auth.login(SeedData.EMAIL_ADMIN, SeedData.DEMO_PASSWORD)
         assertTrue(result is DataResult.Success)
         assertEquals(SeedData.U_ADMIN, f.auth.currentUserId.value)
     }
@@ -84,7 +84,7 @@ class RepositoriesTest {
     @Test
     fun admin_can_verify_and_badge_becomes_verified() = runTest {
         val f = fixture()
-        assertTrue(f.auth.login(SeedData.EMAIL_ADMIN, FakeStore.DEMO_PASSWORD) is DataResult.Success)
+        assertTrue(f.auth.login(SeedData.EMAIL_ADMIN, SeedData.DEMO_PASSWORD) is DataResult.Success)
         // The pending request belongs to U_PROF_PENDING (seed v_prof_p).
         assertTrue(f.admin.reviewVerification("v_prof_p", VerificationStatus.VERIFIED, "مدارک بررسی شد") is DataResult.Success)
         val profile = f.users.observeProfessional(SeedData.U_PROF_PENDING).first()
@@ -107,7 +107,7 @@ class RepositoriesTest {
     fun answer_increments_count_and_notifies_author() = runTest {
         val f = fixture()
         // q_1 author is family1; answer as community member.
-        assertTrue(f.auth.login("volunteer@example.com", FakeStore.DEMO_PASSWORD) is DataResult.Success)
+        assertTrue(f.auth.login("volunteer@example.com", SeedData.DEMO_PASSWORD) is DataResult.Success)
         val before = f.questions.observeQuestion("q_1").first()!!.answerCount
         assertTrue(f.questions.createAnswer("q_1", "یک پاسخ تست") is DataResult.Success)
         val after = f.questions.observeQuestion("q_1").first()!!.answerCount
@@ -125,7 +125,7 @@ class RepositoriesTest {
         f.loginFamily1()
         assertTrue(f.users.observeChildren().first().isNotEmpty()) // family1 has a seeded child
 
-        assertTrue(f.auth.login("parisa@example.com", FakeStore.DEMO_PASSWORD) is DataResult.Success) // family2
+        assertTrue(f.auth.login("parisa@example.com", SeedData.DEMO_PASSWORD) is DataResult.Success) // family2
         assertTrue(f.users.observeChildren().first().isEmpty()) // cannot see family1's child
     }
 
@@ -138,7 +138,7 @@ class RepositoriesTest {
         assertNull(f.groups.observeGroup("g_private").first()) // not even visible
 
         // family2 IS a member.
-        assertTrue(f.auth.login("parisa@example.com", FakeStore.DEMO_PASSWORD) is DataResult.Success)
+        assertTrue(f.auth.login("parisa@example.com", SeedData.DEMO_PASSWORD) is DataResult.Success)
         assertNotNull(f.groups.observeGroup("g_private").first())
     }
 
@@ -153,7 +153,7 @@ class RepositoriesTest {
         assertEquals(MembershipRole.OWNER, myMembership?.role)
 
         // Another user joins a public group immediately.
-        assertTrue(f.auth.login("volunteer@example.com", FakeStore.DEMO_PASSWORD) is DataResult.Success)
+        assertTrue(f.auth.login("volunteer@example.com", SeedData.DEMO_PASSWORD) is DataResult.Success)
         assertTrue(f.groups.joinOrRequest(groupId) is DataResult.Success)
         assertEquals(MembershipStatus.ACTIVE, f.groups.observeMyMembership(groupId).first()?.status)
     }
@@ -166,7 +166,7 @@ class RepositoriesTest {
         assertEquals(MembershipStatus.REQUESTED, f.groups.observeMyMembership("g_private").first()?.status)
 
         // Owner (educator) approves.
-        assertTrue(f.auth.login("teacher@example.com", FakeStore.DEMO_PASSWORD) is DataResult.Success)
+        assertTrue(f.auth.login("teacher@example.com", SeedData.DEMO_PASSWORD) is DataResult.Success)
         assertTrue(f.groups.approveMember("g_private", SeedData.U_FAMILY1) is DataResult.Success)
 
         f.loginFamily1()
@@ -181,7 +181,7 @@ class RepositoriesTest {
         // Non-admin sees no open reports.
         assertTrue(f.reports.observeOpenReports().first().isEmpty())
 
-        assertTrue(f.auth.login(SeedData.EMAIL_ADMIN, FakeStore.DEMO_PASSWORD) is DataResult.Success)
+        assertTrue(f.auth.login(SeedData.EMAIL_ADMIN, SeedData.DEMO_PASSWORD) is DataResult.Success)
         assertTrue(f.reports.observeOpenReports().first().isNotEmpty())
     }
 

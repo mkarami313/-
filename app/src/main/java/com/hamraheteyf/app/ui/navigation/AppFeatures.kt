@@ -94,7 +94,7 @@ object AppFeatures {
     }
 
     private val booking = AppFeature("booking", "نوبت‌دهی", Icons.Outlined.EventAvailable, Routes.BOOKING, order = 37, homeTile = true) { nav ->
-        composable(Routes.BOOKING) { BookingScreen(onBack = { nav.popBackStack() }) }
+        composable(Routes.BOOKING) { BookingScreen(onBack = { nav.popBackStack() }, onOpenProfile = { nav.navigate(Routes.profileView(it)) }) }
     }
 
     private val tools = AppFeature("tools", "ابزارهای روزانه", Icons.Outlined.Extension, Routes.TOOLS, order = 38, homeTile = true) { nav ->

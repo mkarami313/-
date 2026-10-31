@@ -57,6 +57,23 @@ class ServerAuthRepository(private val store: ServerStore) : AuthRepository {
         if (r is DataResult.Success) store.signOut()
         return r
     }
+
+    override suspend fun deleteAccount(password: String): DataResult<Unit> {
+        val r = store.actUnit("deleteAccount", argsJson("password" to password))
+        if (r is DataResult.Success) store.signOut()
+        return r
+    }
+
+    override suspend fun changePassword(current: String, new: String): DataResult<Unit> =
+        when (val r = store.api.action("changePassword", argsJson("current" to current, "new" to new))) {
+            is ApiResult.Ok -> {
+                // The server revoked every old session; adopt the fresh token before anything else polls.
+                ServerStore.stringField(r.data.data, "token")?.let { store.api.token = it }
+                r.data.state?.let { store.refresh(force = true) }
+                DataResult.Success(Unit)
+            }
+            is ApiResult.Fail -> DataResult.Error(r.message)
+        }
 }
 
 // ------------------------------------------------------------------------- Users
@@ -73,11 +90,22 @@ class ServerUserRepository(private val store: ServerStore) : UserRepository {
     override fun observeMyVerification(): Flow<VerificationRequest?> = read.observeMyVerification()
     override fun observeChildren(): Flow<List<ChildProfilePrivate>> = read.observeChildren()
     override fun searchProfessionals(filter: ProfessionalFilter): Flow<List<ProfessionalDirectoryItem>> =
-        read.searchProfessionals(filter)
+        kotlinx.coroutines.flow.combine(read.searchProfessionals(filter), read.observeCurrentUser()) { items, me ->
+            val blocked = me?.blockedUserIds.orEmpty()
+            if (blocked.isEmpty()) items else items.filterNot { it.user.id in blocked }
+        }
 
     override suspend fun updateProfile(displayName: String, city: String?, bio: String?, photoUrl: String?) =
-        store.actUnit("updateProfile", argsJson(
-            "displayName" to displayName, "city" to city, "bio" to bio, "photoUrl" to photoUrl))
+        store.actUnit("updateProfile", argsJson(*buildList<Pair<String, Any?>> {
+            add("displayName" to displayName); add("city" to city); add("bio" to bio)
+            if (photoUrl != null) add("photoUrl" to photoUrl)
+        }.toTypedArray()))
+
+    override suspend fun updateProfileWithPhoto(displayName: String, city: String?, bio: String?, photoId: String?) =
+        store.actUnit("updateProfile", argsJson(*buildList<Pair<String, Any?>> {
+            add("displayName" to displayName); add("city" to city); add("bio" to bio)
+            if (photoId != null) add("photoId" to photoId)
+        }.toTypedArray()))
 
     override suspend fun updatePrivacy(settings: PrivacySettings) =
         store.actUnit("updatePrivacy", argsJson(
@@ -95,22 +123,48 @@ class ServerUserRepository(private val store: ServerStore) : UserRepository {
 
     override suspend fun upsertProfessionalProfile(
         title: String, workAreas: List<String>, city: String?, offersOnline: Boolean, experience: String?,
+        photoId: String?, fee: String?, hours: String?,
     ) = store.actUnit("upsertProfessionalProfile", argsJson(
         "title" to title, "workAreas" to workAreas, "city" to city,
-        "offersOnline" to offersOnline, "experience" to experience))
+        "offersOnline" to offersOnline, "experience" to experience,
+        "photoId" to photoId, "fee" to fee, "hours" to hours))
 
     override suspend fun submitVerificationRequest(
         professionalTitle: String, licenseNumber: String?, credentialNote: String?,
+        requestedType: AccountType?, documentRefs: List<String>,
     ) = store.actUnit("submitVerificationRequest", argsJson(
         "professionalTitle" to professionalTitle, "licenseNumber" to licenseNumber,
-        "credentialNote" to credentialNote))
+        "credentialNote" to credentialNote,
+        "requestedType" to requestedType, "accountType" to requestedType,
+        "documentRefs" to documentRefs))
 
     override suspend fun addChild(nickname: String?, ageRange: AgeRange, interests: List<String>) =
         store.actUnit("addChild", argsJson(
             "nickname" to nickname, "ageRange" to ageRange, "interests" to interests))
 
     override suspend fun deleteChild(childId: String) =
-        store.actUnit("deleteChild", argsJson("childId" to childId))
+        store.actUnit("deleteChild", argsJson("childId" to childId, "confirm" to true))
+
+    override suspend fun updateChild(childId: String, nickname: String?, ageRange: AgeRange, interests: List<String>, notes: String?) =
+        store.actUnit("updateChild", argsJson("id" to childId, "fields" to store.api.json.parseToJsonElement(
+            argsJson(*buildList<Pair<String, Any?>> {
+                // The server rejects an empty nickname, so a blank one is simply left unchanged.
+                if (!nickname.isNullOrBlank()) add("nickname" to nickname)
+                add("ageRange" to ageRange); add("interests" to interests)
+                if (notes != null) add("notes" to notes)
+            }.toTypedArray()))))
+
+    override suspend fun exportMyDataFile(): DataResult<ExportFile> =
+        when (val r = store.act("exportMyData", "{}")) {
+            is DataResult.Success -> {
+                val json = ServerStore.stringField(r.data, "json")
+                if (json.isNullOrBlank()) DataResult.Error("پاسخ سرور نامعتبر است.")
+                else DataResult.Success(ExportFile(
+                    ServerStore.stringField(r.data, "filename") ?: "hamrah-export.json", json,
+                    ServerStore.stringField(r.data, "text").orEmpty()))
+            }
+            is DataResult.Error -> DataResult.Error(r.message)
+        }
 
     override suspend fun exportMyData(): DataResult<String> =
         when (val r = store.act("exportMyData", "{}")) {

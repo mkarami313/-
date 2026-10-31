@@ -20,6 +20,9 @@ object SeedData {
     const val U_EDUCATOR = "u_edu"
     const val U_COMMUNITY = "u_comm"
 
+    /** Shared password for all seeded demo accounts. */
+    const val DEMO_PASSWORD = "demo1234"
+
     const val EMAIL_ADMIN = "admin@example.com"
     const val EMAIL_FAMILY1 = "zahra@example.com"
 
@@ -34,7 +37,7 @@ object SeedData {
         "newpro@example.com",
         "teacher@example.com",
         "volunteer@example.com",
-    ).associate { it to FakeStore.DEMO_PASSWORD }
+    ).associate { it to DEMO_PASSWORD }
 
     fun initial(): Db {
         val users = listOf(

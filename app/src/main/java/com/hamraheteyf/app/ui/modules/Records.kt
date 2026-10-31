@@ -31,6 +31,7 @@ data class Rec(
     val status: String,
     val iBooked: Boolean,
     val bookedByName: String,
+    val ownerId: String = "",
 ) {
     operator fun get(k: String): String = f[k].orEmpty()
     /** One entry per non-blank line. */
@@ -53,6 +54,7 @@ private fun JsonObject.toRec(): Rec {
         status = this["status"]?.jsonPrimitive?.contentOrNull.orEmpty(),
         iBooked = this["iBooked"]?.jsonPrimitive?.booleanOrNull ?: false,
         bookedByName = this["bookedByName"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+        ownerId = this["ownerId"]?.jsonPrimitive?.contentOrNull.orEmpty(),
     )
 }
 

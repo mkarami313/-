@@ -18,8 +18,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.hamraheteyf.app.data.repository.fake.FakeStore
-import com.hamraheteyf.app.data.repository.fake.SeedData
 import com.hamraheteyf.app.di.LocalAppContainer
 import com.hamraheteyf.app.di.appViewModelFactory
 import com.hamraheteyf.app.security.BiometricGate
@@ -154,19 +152,6 @@ fun LoginScreen(onGoToRegister: () -> Unit, onGoToReset: (String) -> Unit = {}, 
         TextButton(onClick = onGoToRegister) { Text("حساب ندارید؟ ثبت‌نام کنید") }
         if (onEmergencyCard != null) TextButton(onClick = onEmergencyCard) { Text("کارت اضطراری") }
 
-        // Demo-only helper so reviewers can sign in without a backend (hidden in SERVER builds).
-        if (com.hamraheteyf.app.BuildConfig.BACKEND == "DEMO") {
-            Spacer(Modifier.height(24.dp))
-            Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.medium) {
-                Column(Modifier.padding(12.dp)) {
-                    Text("حالت نمایشی", style = MaterialTheme.typography.labelLarge)
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        "برای آزمایش می‌توانید با ایمیل ${SeedData.EMAIL_FAMILY1} (خانواده) یا ${SeedData.EMAIL_ADMIN} (مدیر) و رمز ${FakeStore.DEMO_PASSWORD} وارد شوید.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-            }
-        }
+        com.hamraheteyf.app.di.DemoLoginHint()  // renders only in DEMO debug builds
     }
 }

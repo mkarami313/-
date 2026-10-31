@@ -20,6 +20,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import com.hamraheteyf.app.di.LocalAppContainer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -77,8 +79,13 @@ fun ScheduleScreen(onBack: () -> Unit) {
     var editing by remember { mutableStateOf<Rec?>(null) }
     var adding by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<Rec?>(null) }
+    var alarmFor by remember { mutableStateOf<Rec?>(null) }
     var refresh by remember { mutableIntStateOf(0) }
     val st = rememberRecs(client, "schedule", tick)
+    // Step alarms live only on this device; keep them in line with edited / deleted schedules.
+    LaunchedEffect(st.items) {
+        st.items?.let { list -> Reminders.reconcileSteps(ctx.applicationContext, list.associate { it.id to (it["title"] to it.lines("steps")) }) }
+    }
     val api = LocalAppContainer.current.serverApi
     Scaffold(topBar = { ScreenHeader("برنامهٔ تصویری", onBack = onBack) }, floatingActionButton = { AddFab("برنامهٔ جدید") { adding = true } }) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
@@ -95,6 +102,10 @@ fun ScheduleScreen(onBack: () -> Unit) {
                         if (r["cover"].isNotBlank() && api != null) { RemoteImage(api.fileUrl(r["cover"]), Modifier.size(44.dp).clip(MaterialTheme.shapes.small)); Spacer(Modifier.width(10.dp)) }
                         Text(r["title"], style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
                         Text("${done.size.toPersianDigits()} از ${steps.size.toPersianDigits()}", style = MaterialTheme.typography.labelMedium, color = mutedColor())
+                        if (steps.isNotEmpty()) IconButton(onClick = { alarmFor = r }) {
+                            val on = Reminders.stepAlarms(ctx, r.id).isNotEmpty()
+                            Icon(if (on) Icons.Outlined.NotificationsActive else Icons.Outlined.NotificationsNone, contentDescription = if (on) "یادآورهای مراحل: روشن" else "یادآورهای مراحل: خاموش")
+                        }
                         OwnerActions({ editing = r }, { deleting = r })
                     }
                     LinearProgressIndicator(progress = { if (steps.isEmpty()) 0f else done.size.toFloat() / steps.size }, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp))
@@ -113,7 +124,42 @@ fun ScheduleScreen(onBack: () -> Unit) {
     if ((adding || editing != null) && client != null) {
         MediaItemsEditor(client, "schedule", if (editing == null) "برنامهٔ جدید" else "ویرایش برنامه", editing, "title", "عنوان برنامه", "steps", "stepImages", "مرحله", "مراحل (به ترتیب)", false, { adding = false; editing = null }, { adding = false; editing = null; tick++ })
     }
-    deleting?.let { d -> ConfirmDialog("این برنامه حذف شود؟", onYes = { deleting = null; scope.launch { client?.delete("schedule", d.id); tick++ } }, onDismiss = { deleting = null }) }
+    deleting?.let { d -> ConfirmDialog("این برنامه حذف شود؟", onYes = { deleting = null; Reminders.setStepAlarms(ctx.applicationContext, d.id, d["title"], emptyList(), emptyMap()); scope.launch { client?.delete("schedule", d.id); tick++ } }, onDismiss = { deleting = null }) }
+    alarmFor?.let { r -> StepAlarmDialog(r, onClose = { alarmFor = null; refresh++ }) }
+}
+
+/** Optional per-step reminders for a schedule (off by default); stored on this device via [Reminders]. */
+@Composable
+private fun StepAlarmDialog(r: Rec, onClose: () -> Unit) {
+    val ctx = LocalContext.current.applicationContext
+    val steps = r.lines("steps")
+    val times = remember(r.id) { mutableStateMapOf<Int, String>().also { m -> Reminders.stepAlarms(ctx, r.id).forEach { (i, hm) -> m[i] = "%02d:%02d".format(hm.first, hm.second) } } }
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("یادآور مراحل «${r["title"]}»") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("برای هر مرحله که می‌خواهید، ساعت یادآوری را روشن کنید. به‌صورت پیش‌فرض همه خاموش‌اند.", style = MaterialTheme.typography.labelMedium, color = mutedColor())
+                steps.forEachIndexed { i, s ->
+                    val on = i in times
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        Switch(checked = on, onCheckedChange = { c -> if (c) times[i] = times[i] ?: "08:00" else times.remove(i) }, modifier = Modifier.semantics { contentDescription = "یادآور مرحله: $s" })
+                        Spacer(Modifier.width(8.dp))
+                        Text(s, modifier = Modifier.weight(1f), maxLines = 2)
+                        if (on) TimeField("ساعت", times[i].orEmpty(), { times[i] = it })
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val parsed = times.mapNotNull { (i, t) -> ReminderTimes.parse(t).firstOrNull()?.let { i to it } }.toMap()
+                Reminders.setStepAlarms(ctx, r.id, r["title"], steps, parsed)
+                onClose()
+            }) { Text("ذخیره") }
+        },
+        dismissButton = { TextButton(onClick = onClose) { Text("انصراف") } },
+    )
 }
 
 private const val SAMPLE_STORY = "امروز می‌خواهم به دندان‌پزشک بروم.\n\nدندان‌پزشک به دندان‌های من نگاه می‌کند تا سالم بمانند.\n\nروی صندلی می‌نشینم و دهانم را باز می‌کنم. اگر نخواستم، دستم را بالا می‌برم.\n\nبعد از تمام‌شدن، مامان یا بابا من را بغل می‌کند. من کار خوبی کردم."

@@ -26,8 +26,8 @@ android {
         applicationId = "com.hamraheteyf.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 14
-        versionName = "0.13.0"
+        versionCode = 15
+        versionName = "0.14.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -61,6 +61,13 @@ android {
                 "proguard-rules.pro"
             )
         }
+    }
+
+    // Demo backend (SeedData, DemoAppContainer, FakeAuthRepository) compiles into debug + unit tests only;
+    // release gets the stubs in src/release, so no demo credentials or seed data ship in the APK.
+    sourceSets {
+        getByName("debug").java.srcDir("src/demo/java")
+        getByName("test").java.srcDir("src/demo/java")
     }
 
     compileOptions {

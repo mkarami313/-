@@ -39,6 +39,7 @@ fun ConversationScreen(conversationId: String, onBack: () -> Unit) {
     var text by rememberSaveable { mutableStateOf("") }
     var menu by remember { mutableStateOf(false) }
     var showReport by remember { mutableStateOf(false) }
+    var confirmBlock by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     LaunchedEffect(state.messages.size) { if (state.messages.isNotEmpty()) listState.animateScrollToItem(state.messages.size - 1) }
 
@@ -59,6 +60,10 @@ fun ConversationScreen(conversationId: String, onBack: () -> Unit) {
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                         DropdownMenuItem(text = { Text(if (state.isMuted) "لغو بی‌صدا" else "بی‌صدا کردن") }, onClick = { menu = false; vm.toggleMute() })
                         DropdownMenuItem(text = { Text("گزارش کاربر") }, onClick = { menu = false; showReport = true })
+                        DropdownMenuItem(
+                            text = { Text(if (state.otherBlocked) "برداشتن مسدودیت" else "مسدودکردن کاربر") },
+                            onClick = { menu = false; if (state.otherBlocked) vm.unblockOther() else confirmBlock = true },
+                        )
                         DropdownMenuItem(text = { Text("پایان گفتگو") }, onClick = { menu = false; vm.end() })
                     }
                 },
@@ -94,7 +99,9 @@ fun ConversationScreen(conversationId: String, onBack: () -> Unit) {
                         }
                     }
                 }
-                ConversationStatus.ACCEPTED -> {
+                ConversationStatus.ACCEPTED -> if (state.otherBlocked) {
+                    Text("این کاربر را مسدود کرده‌اید؛ تا برداشتن مسدودیت پیامی ارسال نمی‌شود.", Modifier.fillMaxWidth().padding(16.dp), textAlign = TextAlign.Center, color = mutedColor())
+                } else {
                     Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         OutlinedTextField(value = text, onValueChange = { text = it }, placeholder = { Text("پیام…") }, modifier = Modifier.weight(1f))
                         Spacer(Modifier.width(8.dp))
@@ -108,6 +115,15 @@ fun ConversationScreen(conversationId: String, onBack: () -> Unit) {
         }
     }
 
+    if (confirmBlock) {
+        AlertDialog(
+            onDismissRequest = { confirmBlock = false },
+            title = { Text("مسدودکردن ${state.otherName}؟") },
+            text = { Text("این کاربر دیگر نمی‌تواند به شما پیام بدهد و گفتگو برای شما بسته می‌شود. هر زمان می‌توانید مسدودیت را بردارید.") },
+            confirmButton = { TextButton(onClick = { confirmBlock = false; vm.blockOther() }) { Text("مسدود شود", color = MaterialTheme.colorScheme.error) } },
+            dismissButton = { TextButton(onClick = { confirmBlock = false }) { Text("انصراف") } },
+        )
+    }
     if (showReport) {
         ReportDialog(onDismiss = { showReport = false }, onSubmit = { reason: ReportReason, note ->
             vm.report(reason, note); showReport = false

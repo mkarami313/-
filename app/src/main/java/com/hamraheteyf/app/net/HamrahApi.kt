@@ -55,6 +55,8 @@ class HamrahApi(context: Context) {
         explicitNulls = false
     }
 
+    init { FileUrls.attach(this) }
+
     /** Called (from any thread) whenever an authenticated call comes back 401. */
     @Volatile var onUnauthorized: (() -> Unit)? = null
 
@@ -206,7 +208,8 @@ class HamrahApi(context: Context) {
             .fold({ ApiResult.Ok(Unit) }, { ApiResult.Ok(Unit) })
     }
 
-    fun fileUrl(id: String): String = base + "files/" + id
+    /** Signed URL when one is cached (refreshed in the background), else the legacy bare URL. See [FileUrls]. */
+    fun fileUrl(id: String): String = FileUrls.url(id)
 
     /** Persian speech (WAV bytes) synthesized on the server; null when unavailable. POST JSON, GET for old servers. */
     suspend fun tts(text: String): ByteArray? = withContext(Dispatchers.IO) {

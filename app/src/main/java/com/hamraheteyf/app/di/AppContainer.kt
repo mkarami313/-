@@ -59,26 +59,5 @@ class ServerAppContainer(context: Context) : AppContainer {
     override val sessionExpired: StateFlow<Boolean> get() = store.sessionExpired
 }
 
-/**
- * DEMO backend: a single in-memory [FakeStore] shared by all repositories, seeded with
- * fictional data. No network, no keys, fully offline. Used by unit tests and offline preview.
- */
-class DemoAppContainer : AppContainer {
-    private val store = FakeStore(SeedData.initial(), SeedData.credentials())
-
-    override val authRepository: AuthRepository = FakeAuthRepository(store)
-    override val userRepository: UserRepository = FakeUserRepository(store)
-    override val questionRepository: QuestionRepository = FakeQuestionRepository(store)
-    override val groupRepository: GroupRepository = FakeGroupRepository(store)
-    override val conversationRepository: ConversationRepository = FakeConversationRepository(store)
-    override val guideRepository: GuideRepository = FakeGuideRepository(store)
-    override val reportRepository: ReportRepository = FakeReportRepository(store)
-    override val notificationRepository: NotificationRepository = FakeNotificationRepository(store)
-    override val adminRepository: AdminRepository = FakeAdminRepository(store)
-}
-
-/** Chooses the backend from the build config. SERVER by default; DEMO for offline/tests. */
-fun createAppContainer(context: Context): AppContainer = when (BuildConfig.BACKEND) {
-    "DEMO" -> DemoAppContainer()
-    else -> ServerAppContainer(context)
-}
+/** Chooses the backend. SERVER always in release; DEMO (in-memory) only exists in debug/test builds (src/demo). */
+fun createAppContainer(context: Context): AppContainer = demoContainerOrNull() ?: ServerAppContainer(context)

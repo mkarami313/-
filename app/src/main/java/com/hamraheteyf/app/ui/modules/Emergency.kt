@@ -81,9 +81,7 @@ object EmergencyCache {
             val f = photoFile(c, r.id)
             if (r["photo"].isBlank()) { f.delete(); return@forEach }
             runCatching {
-                val c = URL(api.fileUrl(r["photo"])).openConnection() as java.net.HttpURLConnection
-                c.connectTimeout = 10_000; c.readTimeout = 20_000
-                try { if (c.responseCode == 200) f.writeBytes(c.inputStream.use { it.readBytes() }) } finally { c.disconnect() }
+                com.hamraheteyf.app.net.FileUrls.download(r["photo"], 10_000, 20_000)?.let { f.writeBytes(it) }
             }
         }
     }

@@ -90,8 +90,11 @@ fun RegisterScreen(onBack: () -> Unit) {
             BigPrimaryButton(
                 text = if (state.loading) "در حال ایجاد حساب…" else "ایجاد حساب",
                 onClick = {
-                    com.hamraheteyf.app.ui.onboarding.OnboardingPrefs.setPendingPro(context, isPro)
-                    vm.register(name, email, password, AccountType.FAMILY, accepted)
+                    val wantsPro = isPro
+                    val appCtx = context.applicationContext
+                    vm.register(name.trim(), email.trim(), password, AccountType.FAMILY, accepted) {
+                        com.hamraheteyf.app.ui.onboarding.OnboardingPrefs.setPendingPro(appCtx, wantsPro)
+                    }
                 },
                 enabled = !state.loading,
             )

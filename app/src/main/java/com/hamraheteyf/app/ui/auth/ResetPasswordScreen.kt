@@ -98,7 +98,7 @@ fun ResetPasswordScreen(onBack: () -> Unit, initialEmail: String = "") {
                     },
                 )
                 TextButton(onClick = { step = 1; code = ""; error = null }) { Text("ارسال دوباره یا تغییر ایمیل") }
-                Text("کد نرسید؟ از پشتیبانی بخواهید.", style = MaterialTheme.typography.bodySmall, color = mutedColor())
+                Text("کد نرسید؟ پوشهٔ اسپم را ببینید یا چند دقیقه بعد با «ارسال دوباره» کد تازه بگیرید.", style = MaterialTheme.typography.bodySmall, color = mutedColor())
             }
             error?.let {
                 Spacer(Modifier.height(10.dp))
