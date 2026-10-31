@@ -28,11 +28,12 @@ fun RegisterScreen(onBack: () -> Unit) {
     val container = LocalAppContainer.current
     val vm: AuthViewModel = viewModel(factory = appViewModelFactory { AuthViewModel(container.authRepository) })
     val state by vm.state.collectAsState()
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     var name by rememberSaveable { mutableStateOf("") }
     var email by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
-    var accountType by rememberSaveable { mutableStateOf(AccountType.FAMILY) }
+    var isPro by rememberSaveable { mutableStateOf(false) }
     var accepted by rememberSaveable { mutableStateOf(false) }
 
     Scaffold(
@@ -44,7 +45,7 @@ fun RegisterScreen(onBack: () -> Unit) {
             Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
         ) {
             Spacer(Modifier.height(8.dp))
-            InfoBanner("برای شروع فقط چند اطلاعات ساده لازم است. انتخاب نقش «متخصص» به‌خودی‌خود نشان «تخصص تأییدشده» نمی‌دهد؛ تأیید پس از بررسی مدارک توسط مدیر انجام می‌شود.")
+            InfoBanner("برای شروع فقط چند اطلاعات ساده لازم است.")
             Spacer(Modifier.height(16.dp))
 
             OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("نام نمایشی") }, singleLine = true, modifier = Modifier.fillMaxWidth())
@@ -60,23 +61,17 @@ fun RegisterScreen(onBack: () -> Unit) {
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
             )
 
-            Spacer(Modifier.height(16.dp))
-            Text("نوع حساب", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(4.dp))
-            AccountType.entries.forEach { type ->
-                Row(
-                    Modifier.fillMaxWidth().selectable(selected = accountType == type, onClick = { accountType = type }).padding(vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    RadioButton(selected = accountType == type, onClick = { accountType = type })
-                    Spacer(Modifier.width(4.dp))
-                    Text(type.label, style = MaterialTheme.typography.bodyMedium)
-                }
+            Spacer(Modifier.height(12.dp))
+            Row(
+                Modifier.fillMaxWidth().selectable(selected = isPro, onClick = { isPro = !isPro }),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(checked = isPro, onCheckedChange = { isPro = it })
+                Text("من متخصص هستم (مشاور، درمانگر، مربی…)", style = MaterialTheme.typography.bodyMedium)
             }
-
-            Spacer(Modifier.height(8.dp))
             Text(
-                "تفاوت حساب‌ها: «خانواده» برای مراقبان کودک است، «عضو جامعه» برای همراهان داوطلب، و «متخصص» برای ارائه‌دهندگان خدمت که می‌توانند درخواست تأیید تخصص بدهند.",
+                if (isPro) "حساب شما ابتدا با نقش خانواده ساخته می‌شود و بلافاصله بعد از ورود، فرم درخواست تأیید تخصص باز می‌شود. نشان «تخصص تأییدشده» فقط پس از بررسی مدارک توسط مدیر داده می‌شود."
+                else "همهٔ حساب‌ها با نقش «خانواده» شروع می‌شوند. اگر متخصص هستید، گزینهٔ بالا را بزنید.",
                 style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
@@ -94,7 +89,10 @@ fun RegisterScreen(onBack: () -> Unit) {
             Spacer(Modifier.height(16.dp))
             BigPrimaryButton(
                 text = if (state.loading) "در حال ایجاد حساب…" else "ایجاد حساب",
-                onClick = { vm.register(name, email, password, accountType, accepted) },
+                onClick = {
+                    com.hamraheteyf.app.ui.onboarding.OnboardingPrefs.setPendingPro(context, isPro)
+                    vm.register(name, email, password, AccountType.FAMILY, accepted)
+                },
                 enabled = !state.loading,
             )
             Spacer(Modifier.height(24.dp))

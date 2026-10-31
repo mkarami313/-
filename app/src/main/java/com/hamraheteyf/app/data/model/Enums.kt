@@ -121,7 +121,8 @@ enum class ContentType(val label: String) {
     GROUP_POST("پست گروه"),
     MESSAGE("پیام"),
     USER("کاربر"),
-    GUIDE("راهنما");
+    GUIDE("راهنما"),
+    DONATION("آگهی دست‌به‌دست");
 }
 
 @Serializable

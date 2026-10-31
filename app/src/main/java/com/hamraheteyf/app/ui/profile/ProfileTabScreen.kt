@@ -32,6 +32,7 @@ fun ProfileTabScreen(
     onAdmin: () -> Unit,
     onRules: () -> Unit,
     onPrivacy: () -> Unit,
+    onSharesReceived: () -> Unit = {},
 ) {
     val container = LocalAppContainer.current
     val vm: AccountViewModel = viewModel(factory = appViewModelFactory { AccountViewModel(container.authRepository, container.userRepository) })
@@ -75,6 +76,7 @@ fun ProfileTabScreen(
                 if (u.accountType == AccountType.FAMILY) {
                     Entry("اطلاعات کودک (خصوصی)", onChildren)
                 }
+                Entry("اشتراک‌های دریافتی (پروندهٔ کودکِ دیگران)", onSharesReceived)
                 Entry("تنظیمات و حریم خصوصی", onSettings)
                 if (u.isAdmin) Entry("پنل مدیریت", onAdmin)
                 HorizontalDivider()

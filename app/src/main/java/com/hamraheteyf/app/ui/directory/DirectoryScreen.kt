@@ -60,6 +60,8 @@ fun DirectoryScreen(onBack: () -> Unit, onOpenProfile: (String) -> Unit) {
                     FilterChip(selected = filter.verifiedOnly, onClick = { vm.setVerifiedOnly(!filter.verifiedOnly) }, label = { Text("فقط تأییدشده") })
                 }
             }
+            InfoBanner("اطلاعات این فهرست جایگزین مشاورهٔ پزشکی یا درمانی نیست. پیش از هر تصمیم درمانی با متخصص حضوری مشورت کنید.", Modifier.padding(horizontal = 16.dp), dismissKey = "directory_medical_notice")
+            Spacer(Modifier.height(8.dp))
             InfoBanner("نشان تأیید فقط به‌معنای بررسی مدارک ارائه‌شده است و تضمین کیفیت یا نتیجهٔ درمان نیست.", Modifier.padding(horizontal = 16.dp))
             Spacer(Modifier.height(8.dp))
             if (results.isEmpty()) {

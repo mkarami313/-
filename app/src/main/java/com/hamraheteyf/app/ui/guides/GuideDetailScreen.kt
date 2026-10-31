@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.outlined.BookmarkBorder
@@ -50,6 +51,11 @@ fun GuideDetailScreen(guideId: String, onBack: () -> Unit) {
             com.hamraheteyf.app.ui.common.ScreenHeader(
                 "راهنما", onBack = onBack,
                 actions = {
+                    val (openReport, reportDialog) = com.hamraheteyf.app.ui.common.rememberReporter("GUIDE", guideId)
+                    IconButton(onClick = openReport) {
+                        Icon(Icons.Outlined.Flag, contentDescription = "گزارش راهنما", tint = androidx.compose.ui.graphics.Color.White)
+                    }
+                    reportDialog()
                     IconButton(onClick = { vm.toggleSaved() }) {
                         Icon(if (saved) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder, contentDescription = "ذخیره", tint = androidx.compose.ui.graphics.Color.White)
                     }

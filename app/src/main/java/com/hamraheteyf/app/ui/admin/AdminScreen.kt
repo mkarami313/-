@@ -13,6 +13,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.hamraheteyf.app.data.model.AccountStatus
+import com.hamraheteyf.app.data.model.ContentType
 import com.hamraheteyf.app.data.model.ReportStatus
 import com.hamraheteyf.app.data.model.VerificationStatus
 import com.hamraheteyf.app.di.LocalAppContainer
@@ -49,10 +51,10 @@ fun AdminScreen(onBack: () -> Unit) {
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
             InfoBanner("دسترسی مدیر محدود و قابل ممیزی است. مشاهدهٔ مدارک و تصمیم‌ها در «گزارش تغییرات» ثبت می‌شوند.", Modifier.padding(12.dp))
-            TabRow(selectedTabIndex = tab) {
-                Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("گزارش‌ها") })
-                Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("تأیید تخصص") })
-                Tab(selected = tab == 2, onClick = { tab = 2 }, text = { Text("تغییرات") })
+            ScrollableTabRow(selectedTabIndex = tab, edgePadding = 8.dp) {
+                listOf("گزارش‌ها", "تأیید تخصص", "کاربران", "ماژول‌ها و نقش‌ها", "آمار", "اعلان همگانی", "تغییرات").forEachIndexed { i, t ->
+                    Tab(selected = tab == i, onClick = { tab = i }, text = { Text(t, maxLines = 1) })
+                }
             }
             when (tab) {
                 0 -> {
@@ -61,13 +63,18 @@ fun AdminScreen(onBack: () -> Unit) {
                         items(reports, key = { it.id }) { report ->
                             Card(Modifier.fillMaxWidth()) {
                                 Column(Modifier.padding(14.dp)) {
-                                    Text("نوع محتوا: ${report.contentType.label}", style = MaterialTheme.typography.titleMedium)
+                                    Text("هدف گزارش: ${report.contentType.label}", style = MaterialTheme.typography.titleMedium)
                                     Text("دلیل: ${report.reason.label}", style = MaterialTheme.typography.bodyMedium)
                                     report.note?.let { Text("توضیح: $it", style = MaterialTheme.typography.bodyMedium, color = mutedColor()) }
                                     Spacer(Modifier.height(8.dp))
                                     FlowButtons(
-                                        "پنهان‌کردن" to { pending = PendingReason("دلیل پنهان‌کردن") { vm.hideReportedContent(report, it) } },
-                                        "حذف محتوا" to { pending = PendingReason("دلیل حذف") { vm.deleteReportedContent(report, it) } },
+                                        *(if (report.contentType == ContentType.USER) arrayOf<Pair<String, () -> Unit>>(
+                                            "محدودکردن کاربر" to { pending = PendingReason("دلیل محدودسازی") { vm.limitUser(report, AccountStatus.LIMITED, it) } },
+                                            "مسدودکردن کاربر" to { pending = PendingReason("دلیل مسدودسازی") { vm.limitUser(report, AccountStatus.BLOCKED, it) } },
+                                        ) else arrayOf<Pair<String, () -> Unit>>(
+                                            "پنهان‌کردن" to { pending = PendingReason("دلیل پنهان‌کردن") { vm.hideReportedContent(report, it) } },
+                                            "حذف محتوا" to { pending = PendingReason("دلیل حذف") { vm.deleteReportedContent(report, it) } },
+                                        )),
                                         "رسیدگی شد" to { pending = PendingReason("یادداشت رسیدگی") { vm.resolveReport(report.id, ReportStatus.ACTIONED, it) } },
                                         "رد گزارش" to { pending = PendingReason("دلیل رد") { vm.resolveReport(report.id, ReportStatus.DISMISSED, it) } },
                                     )
@@ -76,6 +83,10 @@ fun AdminScreen(onBack: () -> Unit) {
                         }
                     }
                 }
+                2 -> AdminUsersTab(onMessage = { vm.message.value = it })
+                3 -> AdminModulesTab(onMessage = { vm.message.value = it })
+                4 -> AdminStatsTab()
+                5 -> AdminBroadcastTab(onMessage = { vm.message.value = it })
                 1 -> {
                     if (requests.isEmpty()) EmptyState("درخواستی وجود ندارد.")
                     else LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {

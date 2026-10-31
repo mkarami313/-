@@ -8,6 +8,7 @@ import androidx.compose.foundation.verticalScroll
 import android.content.Context
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Verified
+import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Inbox
@@ -15,6 +16,7 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -118,21 +120,100 @@ private fun DismissibleBanner(
     }
     if (!visible) return
     Surface(color = container, shape = MaterialTheme.shapes.medium, modifier = modifier.fillMaxWidth()) {
-        Row(Modifier.padding(start = 12.dp, top = 12.dp, bottom = 12.dp, end = 4.dp), verticalAlignment = Alignment.Top) {
-            Icon(icon, contentDescription = null, tint = content, modifier = Modifier.size(20.dp))
+        Row(Modifier.padding(start = 12.dp), verticalAlignment = Alignment.Top) {
+            Icon(icon, contentDescription = null, tint = content, modifier = Modifier.padding(vertical = 12.dp).size(20.dp))
             Spacer(Modifier.width(8.dp))
-            Text(text, style = MaterialTheme.typography.bodyMedium, color = content, modifier = Modifier.weight(1f))
+            Text(text, style = MaterialTheme.typography.bodyMedium, color = content, modifier = Modifier.weight(1f).padding(vertical = 12.dp))
             if (dismissKey != null) {
-                Spacer(Modifier.width(4.dp))
                 IconButton(
                     onClick = { DismissedNotices.dismiss(context, dismissKey); visible = false },
-                    modifier = Modifier.size(28.dp),
+                    modifier = Modifier.size(48.dp),
                 ) {
-                    Icon(Icons.Outlined.Close, contentDescription = "بستن", tint = content, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Outlined.Close, contentDescription = "بستن اعلان", tint = content, modifier = Modifier.size(18.dp))
                 }
+            } else Spacer(Modifier.width(12.dp))
+        }
+    }
+}
+
+/** Banner whose dismissal lasts only until [resetKey] changes (e.g. one offline episode). */
+@Composable
+private fun EphemeralBanner(
+    modifier: Modifier,
+    resetKey: Any,
+    container: Color,
+    content: Color,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    text: String,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
+) {
+    var closed by rememberSaveable(resetKey) { mutableStateOf(false) }
+    if (closed) return
+    Surface(color = container, shape = MaterialTheme.shapes.medium, modifier = modifier.fillMaxWidth()) {
+        Row(Modifier.padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, contentDescription = null, tint = content, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(text, style = MaterialTheme.typography.bodyMedium, color = content, modifier = Modifier.weight(1f).padding(vertical = 10.dp))
+            if (actionLabel != null && onAction != null) TextButton(onClick = onAction) { Text(actionLabel, color = content) }
+            IconButton(onClick = { closed = true }, modifier = Modifier.size(48.dp)) {
+                Icon(Icons.Outlined.Close, contentDescription = "بستن اعلان", tint = content, modifier = Modifier.size(18.dp))
             }
         }
     }
+}
+
+/** "No connection — showing saved data" notice; hidden when [offline] is false. */
+@Composable
+fun OfflineBanner(offline: Boolean, modifier: Modifier = Modifier) {
+    if (!offline) return
+    EphemeralBanner(
+        modifier, resetKey = "offline",
+        container = MaterialTheme.colorScheme.tertiaryContainer, content = MaterialTheme.colorScheme.onTertiaryContainer,
+        icon = Icons.Outlined.CloudOff,
+        text = "آفلاین هستید؛ آخرین اطلاعات ذخیره‌شده نمایش داده می‌شود.",
+    )
+}
+
+/** Shown on the login screen after the server rejected the saved session. */
+@Composable
+fun SessionExpiredBanner(modifier: Modifier = Modifier) {
+    EphemeralBanner(
+        modifier, resetKey = "expired",
+        container = MaterialTheme.colorScheme.errorContainer, content = MaterialTheme.colorScheme.onErrorContainer,
+        icon = Icons.Outlined.Info,
+        text = "نشست شما منقضی شده است؛ لطفاً دوباره وارد شوید.",
+    )
+}
+
+/** Warns when reminders exist but system notifications are switched off, with a shortcut to the settings page. */
+@Composable
+fun NotificationsOffBanner(modifier: Modifier = Modifier) {
+    val ctx = LocalContext.current
+    var blocked by remember { mutableStateOf(com.hamraheteyf.app.ui.modules.Reminders.notificationsBlocked(ctx)) }
+    val owner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    DisposableEffect(owner) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, e ->
+            if (e == androidx.lifecycle.Lifecycle.Event.ON_RESUME) blocked = com.hamraheteyf.app.ui.modules.Reminders.notificationsBlocked(ctx)
+        }
+        owner.lifecycle.addObserver(obs)
+        onDispose { owner.lifecycle.removeObserver(obs) }
+    }
+    if (!blocked) return
+    EphemeralBanner(
+        modifier, resetKey = "notif",
+        container = MaterialTheme.colorScheme.secondaryContainer, content = MaterialTheme.colorScheme.onSecondaryContainer,
+        icon = Icons.Outlined.Warning,
+        text = "اعلان‌ها خاموش است و یادآورها نمایش داده نمی‌شوند.",
+        actionLabel = "روشن کردن",
+        onAction = {
+            ctx.startActivity(
+                android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, ctx.packageName)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        },
+    )
 }
 
 @Composable
@@ -194,7 +275,7 @@ fun FilterDropdown(
     onSelected: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var expanded by remember { mutableStateOf(false) }
+    var expanded by rememberSaveable { mutableStateOf(false) }
     ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }, modifier = modifier) {
         OutlinedTextField(
             value = selected,
@@ -242,8 +323,8 @@ fun ReportDialog(
     onDismiss: () -> Unit,
     onSubmit: (ReportReason, String) -> Unit,
 ) {
-    var reason by remember { mutableStateOf(ReportReason.DANGEROUS_ADVICE) }
-    var note by remember { mutableStateOf("") }
+    var reason by rememberSaveable { mutableStateOf(ReportReason.DANGEROUS_ADVICE) }
+    var note by rememberSaveable { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("گزارش محتوا") },

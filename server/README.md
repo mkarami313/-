@@ -34,8 +34,14 @@ sudo -u postgres psql -c "CREATE DATABASE rasta_hamrah OWNER rasta_office"
 
 # ۲) پیکربندی  /home/rasta/hamrah/.env
 DB_DSN=dbname=rasta_hamrah user=rasta_office password=… host=127.0.0.1 port=5432
-JWT_SECRET=<۳۲ بایت تصادفی>
+JWT_SECRET=<۳۲ بایت تصادفی>        # الزامی؛ بدونِ آن (یا کوتاه‌تر از ۳۲ نویسه) سرویس بالا نمی‌آید
 PORT=8150
+# ایمیلِ بازیابی رمز (اختیاری؛ خالی = ارسال غیرفعال و فقط adminIssueReset کار می‌کند)
+SMTP_HOST=
+SMTP_PORT=587                       # 465 = SSL مستقیم، غیر از آن STARTTLS
+SMTP_USER=
+SMTP_PASS=
+SMTP_FROM=
 
 # ۳) جدول‌ها + دادهٔ اولیهٔ راهنماها
 python3 hamrah-api.py init-db
@@ -58,3 +64,22 @@ nginx روی `proj.tizbin.org` یک location دارد: `location /hamrah/ → ht
 ## به‌روزرسانی
 
 ویرایشِ محلی → `rsync hamrah-api.py tizbin:/home/rasta/hamrah/` → `ssh tizbin systemctl restart hamrah`.
+
+## بازیابی رمز
+
+* `POST /api/auth/forgot {email}` همیشه `{ok:true}` می‌دهد (وجودِ حساب لو نمی‌رود). اگر حساب هست
+  و SMTP تنظیم است، کدِ ۸ رقمیِ یک‌بارمصرف (۳۰ دقیقه، هش‌شده، حداکثر ۵ تلاش) ایمیل می‌شود.
+* `POST /api/auth/reset {email,code,newPassword}` رمز را عوض و همهٔ نشست‌های قبلی را باطل می‌کند.
+* بدونِ SMTP: مدیر با اکشنِ `adminIssueReset` کد را می‌گیرد و به کاربر می‌رساند.
+* آزمایشِ ارسال: `python3 hamrah-api.py mailtest <گیرنده>`.
+* سرور tizbin MTA محلی ندارد؛ پورت‌های خروجیِ 25/465/587 باز است، پس یک رله با نام‌کاربری/رمز لازم است.
+
+## عملیات
+
+* لاگ دسترسی در journald (بدونِ query؛ شناسهٔ فایل‌ها ماسک)، خطاها با traceback در لاگ و پیامِ عمومی به کلاینت.
+* فایل‌های بی‌صاحب (آپلودی که هیچ سندی به آن اشاره نکند، قدیمی‌تر از ۲۴ ساعت) هنگامِ شروع و روزانه جارو
+  می‌شوند؛ دستی: `python3 hamrah-api.py sweep [ساعت]`.
+* پشتیبان شبانه (`/home/rasta/backup-all-to-server.sh`): دامپِ `rasta_hamrah` + `uploads/` + `.env` +
+  `fcm_sa.json` به `185.8.173.151:/tizbin/` (بدونِ `--delete`).
+* تست دودی: `cd /home/rasta/hamrah && python3 test_smoke.py` (کاربرانِ موقت می‌سازد و پاک می‌کند). ثبت‌نامِ
+  هر IP ساعتی ۱۰ بار محدود است؛ بعد از چند اجرا سرویس را ری‌استارت کن.

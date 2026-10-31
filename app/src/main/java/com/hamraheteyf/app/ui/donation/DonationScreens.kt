@@ -208,6 +208,7 @@ fun DonationDetailScreen(id: String, onBack: () -> Unit, onOpenConversation: (St
                             BigPrimaryButton("این را می‌خواهم", onClick = { askRequest = true }, enabled = !busy)
                         }
                         OutlinedButton(onClick = { chat(d.ownerId) }, modifier = Modifier.fillMaxWidth()) { Text("پیام به اهداکننده") }
+                        com.hamraheteyf.app.ui.common.ReportLink("DONATION", d.id, "گزارش این آگهی")
                     } else {
                         OwnerPanel(d, busy, onChat = ::chat,
                             onApprove = { uid -> run { client.simple("donationApprove", d.id, mapOf("userId" to uid)) } },

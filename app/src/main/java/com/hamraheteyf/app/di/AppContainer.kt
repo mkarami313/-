@@ -6,6 +6,8 @@ import com.hamraheteyf.app.data.repository.*
 import com.hamraheteyf.app.data.repository.fake.*
 import com.hamraheteyf.app.data.repository.server.*
 import com.hamraheteyf.app.net.HamrahApi
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * The app's dependency graph. The UI depends only on repository interfaces, so swapping
@@ -25,7 +27,15 @@ interface AppContainer {
 
     /** Raw API access for self-contained modules (null in the offline DEMO backend). */
     val serverApi: HamrahApi? get() = null
+
+    /** True while the last server refresh failed on the network and cached data is shown. */
+    val offline: StateFlow<Boolean> get() = NeverTrue
+
+    /** True after the server rejected the saved session, until the next sign-in. */
+    val sessionExpired: StateFlow<Boolean> get() = NeverTrue
 }
+
+private val NeverTrue: StateFlow<Boolean> = MutableStateFlow(false)
 
 /**
  * SERVER backend: the self-hosted API (see [BuildConfig.API_BASE_URL]). All repositories
@@ -45,6 +55,8 @@ class ServerAppContainer(context: Context) : AppContainer {
     override val notificationRepository: NotificationRepository = ServerNotificationRepository(store)
     override val adminRepository: AdminRepository = ServerAdminRepository(store)
     override val serverApi: HamrahApi? = store.api
+    override val offline: StateFlow<Boolean> get() = store.offline
+    override val sessionExpired: StateFlow<Boolean> get() = store.sessionExpired
 }
 
 /**

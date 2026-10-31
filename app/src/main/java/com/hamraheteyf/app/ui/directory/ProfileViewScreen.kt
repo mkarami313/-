@@ -126,6 +126,7 @@ fun ProfileViewScreen(userId: String, onBack: () -> Unit, onOpenConversation: (S
                 BigPrimaryButton(text = "درخواست گفتگو", onClick = { vm.requestConversation(onOpenConversation) })
                 Spacer(Modifier.height(8.dp))
                 OutlinedButton(onClick = { vm.block() }, modifier = Modifier.fillMaxWidth()) { Text("مسدودکردن کاربر") }
+                com.hamraheteyf.app.ui.common.ReportLink("USER", userId, "گزارش این کاربر")
             }
             Spacer(Modifier.height(24.dp))
         }

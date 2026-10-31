@@ -1,12 +1,15 @@
 package com.hamraheteyf.app.ui.modules
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -45,29 +48,91 @@ fun AddFab(text: String, onClick: () -> Unit) {
     ExtendedFloatingActionButton(onClick = onClick, icon = { Icon(Icons.Outlined.Add, null) }, text = { Text(text) })
 }
 
-private val DiaryFields = listOf(
-    FieldSpec("childName", "نام کودک"), FieldSpec("date", "تاریخ", hint = "مثلاً ۱۴۰۵/۰۸/۱۰"),
-    FieldSpec("mood", "حال کودک امروز", hint = "آرام، پرتنش، خوش‌خواب…"), FieldSpec("note", "یادداشت", long = true),
-)
-private val MedFields = listOf(
-    FieldSpec("name", "نام دارو یا کار"), FieldSpec("dose", "مقدار"),
-    FieldSpec("times", "ساعت‌های یادآوری", hint = "مثلاً 08:00, 20:00 — هر ساعت یک اعلان روزانه"),
-    FieldSpec("childName", "نام کودک"), FieldSpec("notes", "توضیحات", long = true),
-)
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun TimeChipsEditor(times: String, onChange: (String) -> Unit) {
+    val list = times.split(',', '،', ' ').map { it.trim() }.filter { it.isNotEmpty() }
+    var picking by remember { mutableStateOf(false) }
+    SectionLabel("ساعت‌های یادآوری (هر ساعت یک اعلان روزانه)")
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        list.forEach { t ->
+            InputChip(
+                selected = true, onClick = { onChange(list.filter { it != t }.joinToString(", ")) },
+                label = { Text(Jalali.displayTime(t)) },
+                trailingIcon = { Icon(Icons.Outlined.Delete, "حذف", Modifier.size(16.dp)) },
+            )
+        }
+        AssistChip(onClick = { picking = true }, label = { Text("افزودن ساعت") }, leadingIcon = { Icon(Icons.Outlined.AccessTime, null, Modifier.size(18.dp)) })
+    }
+    if (picking) TimePickerDialogFa("08:00", { picking = false }) { t ->
+        picking = false
+        onChange((list + t).distinct().sorted().joinToString(", "))
+    }
+}
+
+@Composable
+private fun ChildPickerFields(children: List<com.hamraheteyf.app.data.model.ChildProfilePrivate>, v: MutableMap<String, String>) {
+    if (children.isEmpty()) {
+        OutlinedTextField(v["childName"].orEmpty(), { v["childName"] = it }, label = { Text("نام کودک") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    } else {
+        SectionLabel("کودک")
+        ChildChipRow(children, v["childId"].orEmpty(), { id -> v["childId"] = id; v["childName"] = if (id.isBlank()) "" else children.nameOf(id) }, allLabel = "بدون کودک خاص")
+    }
+}
+
+@Composable
+private fun DiaryEditor(client: RecClient, children: List<com.hamraheteyf.app.data.model.ChildProfilePrivate>, initial: Rec?, defaultChild: String, onDismiss: () -> Unit, onDone: () -> Unit) {
+    val d0 = initial?.get("date").orEmpty()
+    val defaults = mapOf(
+        "childId" to defaultChild, "childName" to if (defaultChild.isBlank()) "" else children.nameOf(defaultChild),
+        "date" to if (Jalali.parseIso(d0) != null) d0 else Jalali.todayIso(),
+    )
+    RecEditorDialog(
+        client, "diary", if (initial == null) "یادداشت جدید" else "ویرایش یادداشت", initial, defaults, onDismiss, onDone,
+        canSave = { it["note"].orEmpty().isNotBlank() },
+        beforeSave = { data -> if (Jalali.parseIso(data["date"].orEmpty()) == null) data["date"] = Jalali.todayIso(); null },
+    ) { v, _ ->
+        ChildPickerFields(children, v)
+        JalaliDateField("تاریخ", v["date"].orEmpty(), { v["date"] = it }, Modifier.fillMaxWidth())
+        OutlinedTextField(v["mood"].orEmpty(), { v["mood"] = it }, label = { Text("حال کودک امروز") }, supportingText = { Text("آرام، پرتنش، خوش‌خواب…") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(v["note"].orEmpty(), { v["note"] = it }, label = { Text("یادداشت") }, minLines = 3, modifier = Modifier.fillMaxWidth())
+    }
+}
+
+@Composable
+private fun MedEditor(client: RecClient, children: List<com.hamraheteyf.app.data.model.ChildProfilePrivate>, initial: Rec?, defaultChild: String, onDismiss: () -> Unit, onDone: () -> Unit) {
+    val defaults = mapOf("childId" to defaultChild, "childName" to if (defaultChild.isBlank()) "" else children.nameOf(defaultChild))
+    RecEditorDialog(
+        client, "med", if (initial == null) "دارو یا یادآور جدید" else "ویرایش", initial, defaults, onDismiss, onDone,
+        canSave = { it["name"].orEmpty().isNotBlank() },
+    ) { v, _ ->
+        ChildPickerFields(children, v)
+        OutlinedTextField(v["name"].orEmpty(), { v["name"] = it }, label = { Text("نام دارو یا کار") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(v["dose"].orEmpty(), { v["dose"] = it }, label = { Text("مقدار") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        TimeChipsEditor(v["times"].orEmpty()) { v["times"] = it }
+        OutlinedTextField(v["notes"].orEmpty(), { v["notes"] = it }, label = { Text("توضیحات") }, minLines = 3, modifier = Modifier.fillMaxWidth())
+    }
+}
 
 @Composable
 fun ChildFileScreen(onBack: () -> Unit) {
     val client = rememberRecClient()
     val ctx = LocalContext.current
+    val children = rememberChildren()
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var tick by remember { mutableIntStateOf(0) }
     var editing by remember { mutableStateOf<Rec?>(null) }
     var adding by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<Rec?>(null) }
+    var picked by rememberSaveable { mutableStateOf("") }
+    var showShare by rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val kind = if (tab == 0) "diary" else "med"
     val st = rememberRecs(client, kind, tick)
+    val selected = picked.takeIf { id -> children.any { it.id == id } } ?: if (children.size == 1) children[0].id else ""
     LaunchedEffect(st.items) { if (kind == "med") st.items?.let { Reminders.sync(ctx, it) } }
+    val shown = st.items?.let { all -> if (selected.isBlank()) all else all.filter { it["childId"] == selected || it["childId"].isBlank() && it["childName"] == children.nameOf(selected) } }
+    val view = RecState(shown, st.error)
 
     Scaffold(
         topBar = { ScreenHeader("پروندهٔ کودک", onBack = onBack) },
@@ -75,22 +140,35 @@ fun ChildFileScreen(onBack: () -> Unit) {
     ) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
             InfoBanner("این اطلاعات فقط برای خود شماست و دیگران نمی‌بینند. جایگزین نسخهٔ پزشک نیست.", Modifier.padding(12.dp, 8.dp), dismissKey = "childfile_private")
+            if (children.isNotEmpty()) {
+                ChildChipRow(children, selected, { picked = it; if (it.isBlank()) showShare = false }, modifier = Modifier.padding(horizontal = 12.dp))
+            }
+            if (selected.isNotBlank()) {
+                TextButton(onClick = { showShare = !showShare }, Modifier.padding(horizontal = 4.dp)) { Text(if (showShare) "بستن اشتراک‌گذاری و گزارش" else "اشتراک‌گذاری و گزارش ${children.nameOf(selected)}") }
+                if (showShare) {
+                    Box(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()).padding(horizontal = 12.dp)) {
+                        ShareAndReportSection(selected, children.nameOf(selected))
+                    }
+                }
+            }
             TabRow(selectedTabIndex = tab) {
                 Tab(tab == 0, { tab = 0 }, text = { Text("دفترچهٔ روزانه") })
                 Tab(tab == 1, { tab = 1 }, text = { Text("دارو و یادآور") })
             }
-            RecListBody(st, if (tab == 0) "هنوز یادداشتی ندارید. رفتار، خواب و پیشرفت کودک را اینجا ثبت کنید." else "دارو یا یادآوری ثبت نشده است.", { tick++ }) { r ->
+            RecListBody(view, if (tab == 0) "هنوز یادداشتی ندارید. رفتار، خواب و پیشرفت کودک را اینجا ثبت کنید." else "دارو یا یادآوری ثبت نشده است.", { tick++ }, Modifier.weight(1f)) { r ->
+                val who = r["childId"].takeIf { it.isNotBlank() }?.let { children.nameOf(it) }.orEmpty().ifBlank { r["childName"] }
                 CompactCard {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             if (tab == 0) {
-                                Text(listOf(r["childName"], r["date"].ifBlank { relativeTimeFa(r.createdAt) }).filter { it.isNotBlank() }.joinToString(" · "), style = MaterialTheme.typography.titleSmall)
+                                val date = r["date"].takeIf { it.isNotBlank() }?.let { Jalali.display(it) } ?: relativeTimeFa(r.createdAt)
+                                Text(listOf(who, date).filter { it.isNotBlank() }.joinToString(" · "), style = MaterialTheme.typography.titleSmall)
                                 if (r["mood"].isNotBlank()) Text("حال: ${r["mood"]}", style = MaterialTheme.typography.labelMedium, color = mutedColor())
                                 Text(r["note"], style = MaterialTheme.typography.bodyMedium, maxLines = 4)
                             } else {
                                 Text(r["name"], style = MaterialTheme.typography.titleSmall)
-                                Text(listOf(r["dose"], r["childName"]).filter { it.isNotBlank() }.joinToString(" · "), style = MaterialTheme.typography.labelMedium, color = mutedColor())
-                                if (r["times"].isNotBlank()) CategoryChip("ساعت: ${r["times"]}", accent = true)
+                                Text(listOf(r["dose"], who).filter { it.isNotBlank() }.joinToString(" · "), style = MaterialTheme.typography.labelMedium, color = mutedColor())
+                                if (r["times"].isNotBlank()) CategoryChip("ساعت: ${r["times"].toPersianDigits()}", accent = true)
                                 if (r["notes"].isNotBlank()) Text(r["notes"], style = MaterialTheme.typography.bodySmall, maxLines = 2)
                             }
                         }
@@ -101,22 +179,47 @@ fun ChildFileScreen(onBack: () -> Unit) {
         }
     }
     if ((adding || editing != null) && client != null) {
-        RecFormDialog(client, kind, if (editing == null) "افزودن" else "ویرایش", if (tab == 0) DiaryFields else MedFields, editing,
-            onDismiss = { adding = false; editing = null }, onDone = { adding = false; editing = null; tick++ })
+        val close = { adding = false; editing = null }
+        if (tab == 0) DiaryEditor(client, children, editing, selected, close) { close(); tick++ }
+        else MedEditor(client, children, editing, selected, close) { close(); tick++ }
     }
     deleting?.let { d ->
         ConfirmDialog("این مورد حذف شود؟", onYes = { deleting = null; scope.launch { client?.delete(kind, d.id); tick++ } }, onDismiss = { deleting = null })
     }
 }
 
-private val SlotFields = listOf(
-    FieldSpec("when", "زمان نوبت", hint = "مثلاً شنبه ۱۴۰۵/۰۸/۱۵ ساعت ۱۰:۰۰"), FieldSpec("duration", "مدت (دقیقه)", number = true),
-    FieldSpec("place", "محل یا شیوه", hint = "حضوری در …  /  تلفنی"), FieldSpec("note", "توضیحات", long = true),
-)
+@Composable
+private fun SlotEditor(client: RecClient, initial: Rec?, onDismiss: () -> Unit, onDone: () -> Unit) {
+    val old = initial?.get("when").orEmpty()
+    val defaults = mapOf(
+        "_date" to (Jalali.findJalaliInText(old) ?: Jalali.todayIso()),
+        "_time" to (Jalali.findTimeInText(old) ?: "10:00"),
+    )
+    RecEditorDialog(
+        client, "slot", if (initial == null) "نوبت جدید" else "ویرایش نوبت", initial, defaults, onDismiss, onDone,
+        canSave = { Jalali.parseIso(it["_date"].orEmpty()) != null && it["_time"].orEmpty().isNotBlank() },
+        beforeSave = { data ->
+            val iso = data.remove("_date").orEmpty(); val time = data.remove("_time").orEmpty()
+            val g = Jalali.parseIso(iso) ?: return@RecEditorDialog "تاریخ نوبت را انتخاب کنید."
+            val day = Jalali.WEEKDAYS[Jalali.weekdayIndex(g.y, g.m, g.d)]
+            data["when"] = "$day ${Jalali.display(iso)} ساعت ${Jalali.displayTime(time)}"
+            null
+        },
+    ) { v, _ ->
+        JalaliDateField("تاریخ", v["_date"].orEmpty(), { v["_date"] = it }, Modifier.fillMaxWidth())
+        TimeField("ساعت", v["_time"].orEmpty(), { v["_time"] = it }, Modifier.fillMaxWidth())
+        OutlinedTextField(v["duration"].orEmpty(), { v["duration"] = it.filter(Char::isDigit) }, label = { Text("مدت (دقیقه)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(v["place"].orEmpty(), { v["place"] = it }, label = { Text("محل یا شیوه") }, supportingText = { Text("حضوری در …  /  تلفنی") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(v["note"].orEmpty(), { v["note"] = it }, label = { Text("توضیحات") }, minLines = 3, modifier = Modifier.fillMaxWidth())
+    }
+}
+
+private fun apptId(slotId: String) = "slot_$slotId"
 
 @Composable
 fun BookingScreen(onBack: () -> Unit) {
     val client = rememberRecClient()
+    val ctx = LocalContext.current
     val me = rememberMe()
     val isPro = me != null && (me.isAdmin || me.accountType != AccountType.FAMILY && me.accountType != AccountType.COMMUNITY)
     var tab by rememberSaveable { mutableIntStateOf(0) }
@@ -130,11 +233,21 @@ fun BookingScreen(onBack: () -> Unit) {
     if (tab >= titles.size) tab = 0
     val st = rememberRecs(client, "slot", tick, mine = tab == 2, booked = tab == 1)
 
-    fun act(action: String, id: String) {
+    // Keep local alarms in step with the booked list (a time change by the professional re-arms; unparseable times are skipped).
+    LaunchedEffect(st.items, tab) {
+        if (tab == 1) st.items?.forEach { r ->
+            Jalali.epochMsFromText(r["when"])?.let { Reminders.scheduleAppointment(ctx, apptId(r.id), "نوبت با ${r.ownerName}: ${r["when"]}", it) }
+        }
+    }
+
+    fun act(action: String, r: Rec) {
         scope.launch {
-            when (val r = client!!.simple(action, id)) {
-                is ApiResult.Fail -> snack.showSnackbar(r.message)
-                is ApiResult.Ok -> {}
+            when (val res = client!!.simple(action, r.id)) {
+                is ApiResult.Fail -> snack.showSnackbar(res.message)
+                is ApiResult.Ok -> when (action) {
+                    "slotBook" -> Jalali.epochMsFromText(r["when"])?.let { Reminders.scheduleAppointment(ctx, apptId(r.id), "نوبت با ${r.ownerName}: ${r["when"]}", it) }
+                    "slotCancel" -> Reminders.cancel(ctx, apptId(r.id))
+                }
             }
             tick++
         }
@@ -146,9 +259,10 @@ fun BookingScreen(onBack: () -> Unit) {
         floatingActionButton = { if (tab == 2) AddFab("نوبت جدید") { adding = true } },
     ) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
-            InfoBanner("رزرو نوبت رایگان است و هیچ پرداختی در برنامه انجام نمی‌شود.", Modifier.padding(12.dp, 8.dp), dismissKey = "booking_free")
+            InfoBanner("رزرو نوبت رایگان است و هیچ پرداختی در برنامه انجام نمی‌شود.", Modifier.padding(12.dp, 8.dp, 12.dp, 0.dp), dismissKey = "booking_free")
+            InfoBanner("نوبت‌دهی فقط برای هماهنگی زمان ملاقات است و جایگزین تشخیص یا توصیهٔ پزشکی نیست. در شرایط اورژانسی با ۱۱۵ تماس بگیرید.", Modifier.padding(12.dp, 8.dp), dismissKey = "booking_medical")
             TabRow(selectedTabIndex = tab) { titles.forEachIndexed { i, t -> Tab(tab == i, { tab = i }, text = { Text(t) }) } }
-            RecListBody(st, when (tab) { 0 -> "فعلاً نوبت آزادی ثبت نشده است."; 1 -> "رزروی ندارید."; else -> "هنوز نوبتی ثبت نکرده‌اید." }, { tick++ }) { r ->
+            RecListBody(st, when (tab) { 0 -> "فعلاً نوبت آزادی ثبت نشده است."; 1 -> "رزروی ندارید."; else -> "هنوز نوبتی ثبت نکرده‌اید." }, { tick++ }, Modifier.weight(1f)) { r ->
                 CompactCard {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
@@ -162,12 +276,12 @@ fun BookingScreen(onBack: () -> Unit) {
                     }
                     Spacer(Modifier.height(6.dp))
                     when (tab) {
-                        0 -> Button(onClick = { act("slotBook", r.id) }, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)) { Text("رزرو این نوبت") }
-                        1 -> OutlinedButton(onClick = { act("slotCancel", r.id) }, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)) { Text("لغو رزرو") }
+                        0 -> Button(onClick = { act("slotBook", r) }, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)) { Text("رزرو این نوبت") }
+                        1 -> OutlinedButton(onClick = { act("slotCancel", r) }, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)) { Text("لغو رزرو") }
                         else -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             if (r.status == "BOOKED") {
                                 CategoryChip("رزرو: ${r.bookedByName}", accent = true)
-                                TextButton(onClick = { act("slotCancel", r.id) }) { Text("لغو رزرو") }
+                                TextButton(onClick = { act("slotCancel", r) }) { Text("لغو رزرو") }
                             } else CategoryChip("آزاد")
                         }
                     }
@@ -176,8 +290,8 @@ fun BookingScreen(onBack: () -> Unit) {
         }
     }
     if ((adding || editing != null) && client != null) {
-        RecFormDialog(client, "slot", if (editing == null) "نوبت جدید" else "ویرایش نوبت", SlotFields, editing,
-            onDismiss = { adding = false; editing = null }, onDone = { adding = false; editing = null; tick++ })
+        val close = { adding = false; editing = null }
+        SlotEditor(client, editing, close) { close(); tick++ }
     }
     deleting?.let { d ->
         ConfirmDialog(if (d.status == "BOOKED") "این نوبت رزرو شده است؛ با حذف، به رزروکننده اطلاع داده می‌شود. ادامه می‌دهید؟" else "این نوبت حذف شود؟",

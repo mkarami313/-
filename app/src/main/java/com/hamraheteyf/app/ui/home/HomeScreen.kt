@@ -17,7 +17,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.hamraheteyf.app.ui.onboarding.OnboardingPrefs
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.hamraheteyf.app.di.LocalAppContainer
 import com.hamraheteyf.app.di.appViewModelFactory
@@ -43,12 +45,18 @@ fun HomeScreen(
     val groups by vm.groups.collectAsState()
     val guides by vm.guides.collectAsState()
     val unread by vm.unreadCount.collectAsState()
+    val ctx = LocalContext.current
+    val interests = remember(user?.id) { user?.id?.let { OnboardingPrefs.interests(ctx, it) }.orEmpty() }
+    val grouped = remember(tiles, interests) { groupTiles(tiles, interests) }
 
     Scaffold(
         topBar = {
             ScreenHeader(
                 title = "سلام${user?.let { "، ${it.displayName}" } ?: ""}",
                 actions = {
+                    IconButton(onClick = { onNavigate(Routes.SEARCH) }) {
+                        Icon(Icons.Outlined.Search, contentDescription = "جست‌وجو", tint = Color.White)
+                    }
                     BadgedBox(badge = { if (unread > 0) Badge { Text(unread.toPersianDigits()) } }) {
                         IconButton(onClick = { onNavigate(Routes.NOTIFICATIONS) }) {
                             Icon(Icons.Outlined.Notifications, contentDescription = "اعلان‌ها", tint = Color.White)
@@ -77,12 +85,15 @@ fun HomeScreen(
             }
 
             ActionTile("پرسش بپرس", Icons.Outlined.Edit, primary = true, onClick = { onNavigate(Routes.QA_CREATE) }, modifier = Modifier.fillMaxWidth())
-            tiles.chunked(2).forEach { rowItems ->
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    rowItems.forEach { f ->
-                        ActionTile(f.title, f.icon, onClick = { onNavigate(f.entryRoute) }, modifier = Modifier.weight(1f))
+            grouped.forEach { (title, items) ->
+                Text(title, style = MaterialTheme.typography.titleSmall, color = mutedColor(), modifier = Modifier.padding(top = 4.dp))
+                items.chunked(2).forEach { rowItems ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        rowItems.forEach { f ->
+                            ActionTile(f.title, f.icon, onClick = { onNavigate(f.entryRoute) }, modifier = Modifier.weight(1f))
+                        }
+                        if (rowItems.size == 1) Spacer(Modifier.weight(1f))
                     }
-                    if (rowItems.size == 1) Spacer(Modifier.weight(1f))
                 }
             }
 
@@ -102,6 +113,25 @@ fun HomeScreen(
             Spacer(Modifier.height(8.dp))
         }
     }
+}
+
+private val CHILD_IDS = setOf("childfile", "booking")
+private val LEARN_IDS = setOf("courses", "guides")
+private val COMMUNITY_IDS = setOf("qa", "groups", "messages", "donations", "directory", "places")
+private val TOOL_IDS = setOf("tools")
+
+/** Splits home tiles into «کودک من / یادگیری / جامعه / ابزارها» (+ «سایر» for modules added later); the user's chosen interests come first. */
+private fun groupTiles(tiles: List<AppFeature>, interests: Set<String>): List<Pair<String, List<AppFeature>>> {
+    fun sorted(l: List<AppFeature>) = l.sortedWith(compareBy({ if (it.id in interests) 0 else 1 }, { it.order }))
+    val known = CHILD_IDS + LEARN_IDS + COMMUNITY_IDS + TOOL_IDS
+    val groups = listOf(
+        "کودک من" to sorted(tiles.filter { it.id in CHILD_IDS }),
+        "یادگیری" to sorted(tiles.filter { it.id in LEARN_IDS }),
+        "جامعه" to sorted(tiles.filter { it.id in COMMUNITY_IDS }),
+        "ابزارها" to sorted(tiles.filter { it.id in TOOL_IDS }),
+        "سایر" to sorted(tiles.filter { it.id !in known }),
+    ).filter { it.second.isNotEmpty() }
+    return if (interests.isEmpty()) groups else groups.sortedBy { (_, l) -> if (l.any { it.id in interests }) 0 else 1 }
 }
 
 @Composable

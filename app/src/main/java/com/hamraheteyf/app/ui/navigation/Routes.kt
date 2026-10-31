@@ -5,6 +5,12 @@ object Routes {
     // Auth
     const val LOGIN = "login"
     const val REGISTER = "register"
+    const val RESET = "reset_password"
+    const val EMERGENCY_CARD_PUBLIC = "emergency_card_public"
+    const val ONBOARDING = "onboarding"
+    const val SHARES_RECEIVED = "shares_received"
+    const val SHARE_VIEW = "share_view/{id}"
+    fun shareView(id: String) = "share_view/$id"
 
     // Bottom-nav tabs
     const val HOME = "home"
@@ -44,6 +50,11 @@ object Routes {
     const val TOOLS_SCHEDULE = "tools_schedule"
     const val TOOLS_STORIES = "tools_stories"
     const val TOOLS_AAC = "tools_aac"
+    const val TOOLS_LOG = "tools_log"
+    const val TOOLS_EMERGENCY = "tools_emergency"
+    const val TOOLS_REWARD = "tools_reward"
+    const val TOOLS_FIRSTTHEN = "tools_firstthen"
+    const val TOOLS_TIMER = "tools_timer"
     const val COURSES = "courses"
     const val COURSE_DETAIL = "course_detail/{courseId}"
     fun courseDetail(id: String) = "course_detail/$id"

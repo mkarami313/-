@@ -27,7 +27,7 @@ import com.hamraheteyf.app.security.LocalCredentialVault
 import com.hamraheteyf.app.ui.common.BigPrimaryButton
 
 @Composable
-fun LoginScreen(onGoToRegister: () -> Unit) {
+fun LoginScreen(onGoToRegister: () -> Unit, onGoToReset: (String) -> Unit = {}, onEmergencyCard: (() -> Unit)? = null) {
     val container = LocalAppContainer.current
     val vault = LocalCredentialVault.current
     val context = LocalContext.current
@@ -150,8 +150,9 @@ fun LoginScreen(onGoToRegister: () -> Unit) {
         }
 
         Spacer(Modifier.height(8.dp))
-        TextButton(onClick = { vm.resetPassword(email) }) { Text("رمز عبور را فراموش کرده‌ام") }
+        TextButton(onClick = { onGoToReset(email) }) { Text("فراموشی رمز") }
         TextButton(onClick = onGoToRegister) { Text("حساب ندارید؟ ثبت‌نام کنید") }
+        if (onEmergencyCard != null) TextButton(onClick = onEmergencyCard) { Text("کارت اضطراری") }
 
         // Demo-only helper so reviewers can sign in without a backend (hidden in SERVER builds).
         if (com.hamraheteyf.app.BuildConfig.BACKEND == "DEMO") {

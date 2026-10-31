@@ -12,7 +12,10 @@ actually enforced rather than merely mirrored on the client.
 Protocol (all JSON):
   POST /api/auth/register  {displayName,email,password,accountType,acceptedTerms} -> {token,user}
   POST /api/auth/login     {email,password}                                        -> {token,user}
-  POST /api/auth/reset     {email}                                                 -> {ok:true}
+  POST /api/auth/forgot    {email}                  -> {ok:true} always; emails an 8-digit code if SMTP is set
+  POST /api/auth/reset     {email,code,newPassword} -> {ok:true} | {ok:false,error}
+  POST /api/tts            {text} (Bearer)          -> audio bytes   (GET ?text= kept for old clients)
+  GET  /api/report?childId=&from=&to=&share=        (Bearer) -> printable RTL HTML report
   GET  /api/state          (Bearer)   -> a snapshot scoped to what the caller may read
   POST /api/action         (Bearer) {name, args:{...}}  -> {ok:true, data?} | {ok:false, error}
 
@@ -25,6 +28,8 @@ CLI:
   python3 hamrah-api.py feature ID on|off                 # toggle a module for all users
   python3 hamrah-api.py perm ID ROLE,ROLE|all             # restrict a module to account types
   python3 hamrah-api.py create-admin EMAIL PASSWORD "نام"   # make/replace an admin account
+  python3 hamrah-api.py mailtest TO                       # send a test email through SMTP_* settings
+  python3 hamrah-api.py sweep                             # delete orphan uploads (unreferenced, >24h old)
 """
 
 import os
@@ -37,6 +42,7 @@ import base64
 import hashlib
 import secrets
 import threading
+import traceback
 import urllib.request
 import urllib.parse
 import urllib.error
@@ -65,10 +71,31 @@ def _load_env():
 
 
 ENV = _load_env()
-DB_DSN = ENV.get("DB_DSN", "dbname=rasta_hamrah user=rasta_office host=127.0.0.1 port=5432")
-JWT_SECRET = ENV.get("JWT_SECRET", "change-me").encode("utf-8")
-PORT = int(ENV.get("PORT", "8150"))
-TOKEN_TTL = int(ENV.get("TOKEN_TTL_SECONDS", str(30 * 24 * 3600)))  # 30 days
+
+
+def _cfg(key, default=""):
+    return os.environ.get(key) or ENV.get(key, default)
+
+
+def log(*a):
+    print(*a, file=sys.stderr, flush=True)
+
+
+DB_DSN = _cfg("DB_DSN", "dbname=rasta_hamrah user=rasta_office host=127.0.0.1 port=5432")
+_jwt = _cfg("JWT_SECRET")
+if len(_jwt) < 16 or _jwt == "change-me":
+    sys.exit("hamrah-api: JWT_SECRET is missing or too short (set it in .env) - refusing to start.")
+JWT_SECRET = _jwt.encode("utf-8")
+PORT = int(_cfg("PORT", "8150"))
+TOKEN_TTL = int(_cfg("TOKEN_TTL_SECONDS", str(30 * 24 * 3600)))  # 30 days
+
+# Outgoing mail (password-reset codes). All optional: without SMTP_HOST nothing is sent and the
+# admin path (adminIssueReset) stays the fallback.
+SMTP_HOST = _cfg("SMTP_HOST")
+SMTP_PORT = int(_cfg("SMTP_PORT", "587") or "587")
+SMTP_USER = _cfg("SMTP_USER")
+SMTP_PASS = _cfg("SMTP_PASS")
+SMTP_FROM = _cfg("SMTP_FROM") or SMTP_USER
 
 # FCM (push). All Google traffic egresses via the box82 German-IP proxy (see FCM_PROXY) so
 # the Firebase project is never hit from an Iranian IP. Both are optional: without the SA
@@ -165,28 +192,56 @@ class Store:
                 self.delete(coll, d["id"])
 
 
+PBKDF2_ITERS = 600000
+_hash_sem = threading.BoundedSemaphore(4)  # cap concurrent KDF work (CPU-DoS guard)
+MAX_PASSWORD = 128
+
+
+def _pbkdf2(password, salt, iters):
+    with _hash_sem:
+        return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), iters).hex()
+
+
 def set_cred(email, password, uid):
     salt = secrets.token_hex(16)
-    h = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 120000).hex()
+    h = _pbkdf2(password, salt, PBKDF2_ITERS)
     cur = conn().cursor()
     cur.execute(
-        "INSERT INTO creds(email,salt,pwhash,uid) VALUES(%s,%s,%s,%s) "
-        "ON CONFLICT(email) DO UPDATE SET salt=EXCLUDED.salt,pwhash=EXCLUDED.pwhash,uid=EXCLUDED.uid",
-        (email.strip().lower(), salt, h, uid),
+        "INSERT INTO creds(email,salt,pwhash,uid,iters) VALUES(%s,%s,%s,%s,%s) "
+        "ON CONFLICT(email) DO UPDATE SET salt=EXCLUDED.salt,pwhash=EXCLUDED.pwhash,"
+        "uid=EXCLUDED.uid,iters=EXCLUDED.iters",
+        (email.strip().lower(), salt, h, uid, PBKDF2_ITERS),
     )
     cur.close()
 
 
 def check_cred(email, password):
+    mail = email.strip().lower()
     cur = conn().cursor()
-    cur.execute("SELECT salt,pwhash,uid FROM creds WHERE email=%s", (email.strip().lower(),))
+    cur.execute("SELECT salt,pwhash,uid,iters FROM creds WHERE email=%s", (mail,))
     row = cur.fetchone()
     cur.close()
     if not row:
+        _pbkdf2(password, "0" * 32, PBKDF2_ITERS)  # equalise timing: don't reveal unknown emails
         return None
-    salt, pwhash, uid = row
-    h = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 120000).hex()
-    return uid if hmac.compare_digest(h, pwhash) else None
+    salt, pwhash, uid, iters = row
+    h = _pbkdf2(password, salt, iters or 120000)
+    if not hmac.compare_digest(h, pwhash):
+        return None
+    if (iters or 120000) < PBKDF2_ITERS:  # transparent upgrade of old hashes
+        try:
+            set_cred(mail, password, uid)
+        except Exception:
+            log("cred upgrade failed:", traceback.format_exc(limit=2))
+    return uid
+
+
+def cred_uid(email):
+    cur = conn().cursor()
+    cur.execute("SELECT uid FROM creds WHERE email=%s", (email.strip().lower(),))
+    row = cur.fetchone()
+    cur.close()
+    return row[0] if row else None
 
 
 def has_email(email):
@@ -217,13 +272,20 @@ def _b64d(s):
 
 def make_token(uid):
     header = _b64(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
-    payload = _b64(json.dumps({"uid": uid, "exp": int(time.time()) + TOKEN_TTL}).encode())
+    now = int(time.time())
+    payload = _b64(json.dumps({"uid": uid, "iat": now, "exp": now + TOKEN_TTL}).encode())
     signing = ("%s.%s" % (header, payload)).encode()
     sig = _b64(hmac.new(JWT_SECRET, signing, hashlib.sha256).digest())
     return "%s.%s.%s" % (header, payload, sig)
 
 
 def verify_token(token):
+    r = verify_token_full(token)
+    return r[0] if r else None
+
+
+def verify_token_full(token):
+    """-> (uid, iat) for a validly signed, unexpired token, else None."""
     try:
         header, payload, sig = token.split(".")
         signing = ("%s.%s" % (header, payload)).encode()
@@ -233,9 +295,86 @@ def verify_token(token):
         data = json.loads(_b64d(payload))
         if data.get("exp", 0) < int(time.time()):
             return None
-        return data.get("uid")
+        uid = data.get("uid")
+        return (uid, int(data.get("iat", 0))) if uid else None
     except Exception:
         return None
+
+
+def token_user(token):
+    """Full auth check: signature + expiry + user still exists, is not BLOCKED/DELETED and the
+    token was issued after the user's tokensValidAfter (password reset / forced logout)."""
+    r = verify_token_full(token)
+    if not r:
+        return None
+    uid, iat = r
+    cur = conn().cursor()
+    cur.execute("SELECT data FROM docs WHERE collection='users' AND id=%s", (uid,))
+    row = cur.fetchone()
+    cur.close()
+    if not row:
+        return None
+    u = row[0]
+    if u.get("status") in ("BLOCKED", "DELETED"):
+        return None
+    if iat < int(u.get("tokensValidAfter", 0) or 0):
+        return None
+    return uid
+
+
+# --------------------------------------------------------------------------------------
+# Rate limiting (in-memory, per process) + serialisation of writes
+# --------------------------------------------------------------------------------------
+
+class RateLimiter:
+    def __init__(self):
+        self._h = {}
+        self._lock = threading.Lock()
+
+    def _prune(self, key, window, now):
+        q = [t for t in self._h.get(key, ()) if now - t < window]
+        if q:
+            self._h[key] = q
+        else:
+            self._h.pop(key, None)
+        return q
+
+    def blocked(self, key, limit, window):
+        with self._lock:
+            return len(self._prune(key, window, time.time())) >= limit
+
+    def hit(self, key, window):
+        with self._lock:
+            now = time.time()
+            q = self._prune(key, window, now)
+            q.append(now)
+            self._h[key] = q
+            if len(self._h) > 20000:  # bound memory under key-spraying
+                for k in list(self._h)[:5000]:
+                    self._prune(k, window, now)
+
+    def allow(self, key, limit, window):
+        """Count one event; False when the limit for the window is already used up."""
+        with self._lock:
+            now = time.time()
+            q = self._prune(key, window, now)
+            if len(q) >= limit:
+                return False
+            q.append(now)
+            self._h[key] = q
+            return True
+
+    def clear(self, key):
+        with self._lock:
+            self._h.pop(key, None)
+
+
+RL = RateLimiter()
+TOO_MANY = "تلاش‌های بیش از حد. چند دقیقه بعد دوباره امتحان کنید."
+
+# One process-wide lock serialises every mutating action, so read-modify-write sequences on the
+# docs table (slot booking, donation requests, helpful toggles, per-user caps) cannot interleave.
+MUT_LOCK = threading.RLock()
 
 
 # --------------------------------------------------------------------------------------
@@ -302,7 +441,8 @@ def _fcm_project():
 
 def _fcm_send_one(device_token, title, body, data):
     """Returns (ok, should_remove_token). Data-only + high priority so the app shows it
-    itself (and dedupes on notifId), which keeps a single push even with two channels."""
+    itself (and dedupes on notifId), which keeps a single push even with two channels.
+    A token is pruned only when FCM says it is UNREGISTERED / NOT_FOUND."""
     try:
         access = _fcm_access_token()
         payload = json.dumps({"message": {
@@ -317,30 +457,31 @@ def _fcm_send_one(device_token, title, body, data):
         _fcm_opener().open(req, timeout=15)
         return True, False
     except urllib.error.HTTPError as e:
-        detail = ""
+        status, codes = "", []
         try:
-            detail = e.read().decode()
+            err = json.loads(e.read().decode()).get("error", {})
+            status = err.get("status", "")
+            codes = [d.get("errorCode", "") for d in err.get("details", []) if isinstance(d, dict)]
         except Exception:
             pass
-        # A dead/invalid token should be pruned so we stop trying it.
-        remove = e.code == 404 or ("UNREGISTERED" in detail) or ("not a valid FCM registration" in detail)
+        remove = status == "NOT_FOUND" or "UNREGISTERED" in codes or status == "UNREGISTERED"
+        if not remove:
+            log("fcm send failed: http=%s status=%s codes=%s" % (e.code, status, codes))
         return False, remove
-    except Exception:
+    except Exception as e:
+        log("fcm send error: %s" % type(e).__name__)
         return False, False
 
 
-def push_to_user(store, user_id, nid, ntype, title, body, related_id):
-    """Fan out a push to the user's registered devices, off the request thread."""
-    if not os.path.exists(FCM_SA_FILE):
+def _fcm_fanout(pairs, title, body, ntype, related_id):
+    """pairs = [(device_token, notifId)] -> send on a daemon thread, prune dead tokens."""
+    if not pairs or not os.path.exists(FCM_SA_FILE):
         return
-    tokens = [t["id"] for t in store.all("pushTokens") if t.get("userId") == user_id]
-    if not tokens:
-        return
-    data = {"notifId": nid, "type": ntype or "", "relatedId": related_id or ""}
 
     def worker():
         dead = []
-        for tok in tokens:
+        for tok, nid in pairs:
+            data = {"notifId": nid, "type": ntype or "", "relatedId": related_id or ""}
             ok, remove = _fcm_send_one(tok, title, body, data)
             if remove:
                 dead.append(tok)
@@ -351,9 +492,15 @@ def push_to_user(store, user_id, nid, ntype, title, body, related_id):
                     cur.execute("DELETE FROM docs WHERE collection='pushTokens' AND id=%s", (tok,))
                 cur.close()
             except Exception:
-                pass
+                log("fcm prune failed:", traceback.format_exc(limit=2))
 
     threading.Thread(target=worker, daemon=True).start()
+
+
+def push_to_user(store, user_id, nid, ntype, title, body, related_id):
+    """Fan out a push to the user's registered devices, off the request thread."""
+    tokens = [t["id"] for t in store.all("pushTokens") if t.get("userId") == user_id]
+    _fcm_fanout([(t, nid) for t in tokens], title, body, ntype, related_id)
 
 
 def add_notification(store, user_id, ntype, title, body, related_id=None):
@@ -412,18 +559,31 @@ def a_updateProfile(store, uid, args):
     u = store.get("users", uid)
     if not u:
         raise ApiError("حساب یافت نشد.")
-    u["displayName"] = _s(args.get("displayName"))
-    u["city"] = _s(args.get("city")) or None
-    u["bio"] = _s(args.get("bio")) or None
-    u["photoUrl"] = args.get("photoUrl")
+    u["displayName"] = _s(args.get("displayName"))[:60]
+    u["city"] = _s(args.get("city"))[:60] or None
+    u["bio"] = _s(args.get("bio"))[:600] or None
+    photo = args.get("photoUrl")
+    u["photoUrl"] = photo[:500] if isinstance(photo, str) else None
     u["updatedAt"] = now_ms()
     store.put("users", u)
+
+
+PRIVACY_KEYS = ("showCity", "showBio", "allowMessageRequests")
+
+
+def _bool_settings(raw, keys, base):
+    out = dict(base or {})
+    if isinstance(raw, dict):
+        for k in keys:
+            if isinstance(raw.get(k), bool):
+                out[k] = raw[k]
+    return {k: v for k, v in out.items() if k in keys}
 
 
 def a_updatePrivacy(store, uid, args):
     _require(uid)
     u = store.get("users", uid)
-    u["privacy"] = args.get("settings") or {}
+    u["privacy"] = _bool_settings(args.get("settings"), PRIVACY_KEYS, u.get("privacy"))
     u["updatedAt"] = now_ms()
     store.put("users", u)
 
@@ -431,7 +591,8 @@ def a_updatePrivacy(store, uid, args):
 def a_updateNotificationSettings(store, uid, args):
     _require(uid)
     u = store.get("users", uid)
-    u["notificationSettings"] = args.get("settings") or {}
+    u["notificationSettings"] = _bool_settings(
+        args.get("settings"), tuple(NOTIF_TOGGLE.values()), u.get("notificationSettings"))
     u["updatedAt"] = now_ms()
     store.put("users", u)
 
@@ -441,6 +602,8 @@ def a_blockUser(store, uid, args):
     target = args.get("targetUserId")
     if uid == target:
         raise ApiError("نمی‌توانید خودتان را مسدود کنید.")
+    if not isinstance(target, str) or not store.get("users", target):
+        raise ApiError("کاربر یافت نشد.")
     u = store.get("users", uid)
     blocked = set(u.get("blockedUserIds") or [])
     blocked.add(target)
@@ -462,8 +625,9 @@ def a_upsertProfessionalProfile(store, uid, args):
     u = store.get("users", uid)
     if not u:
         raise ApiError("حساب یافت نشد.")
-    if u.get("accountType") not in PRO_TYPES:
-        raise ApiError("این نوع حساب پروفایل تخصصی ندارد.")
+    if u.get("accountType") not in PRO_TYPES and not any(
+            v.get("userId") == uid for v in store.all("verifications")):
+        raise ApiError("ابتدا درخواست تأیید تخصص ثبت کنید.")
     if not _s(args.get("title")):
         raise ApiError("عنوان تخصص را وارد کنید.")
     existing = next((p for p in store.all("professionals") if p.get("userId") == uid), None)
@@ -492,8 +656,8 @@ def a_submitVerificationRequest(store, uid, args):
     u = store.get("users", uid)
     if not u:
         raise ApiError("حساب یافت نشد.")
-    if u.get("accountType") not in PRO_TYPES:
-        raise ApiError("این نوع حساب امکان درخواست تأیید تخصص ندارد.")
+    if u.get("isAdmin"):
+        raise ApiError("حساب مدیریت امکان درخواست تأیید تخصص ندارد.")
     title = _s(args.get("professionalTitle"))
     if not title:
         raise ApiError("عنوان تخصص را وارد کنید.")
@@ -504,6 +668,8 @@ def a_submitVerificationRequest(store, uid, args):
         "id": new_id("v"), "userId": uid, "professionalTitle": title,
         "licenseNumber": _s(args.get("licenseNumber")) or None,
         "credentialNote": _s(args.get("credentialNote")) or None,
+        "requestedType": args.get("accountType") if args.get("accountType") in PRO_TYPES else (
+            u.get("accountType") if u.get("accountType") in PRO_TYPES else "PROFESSIONAL"),
         "documentRefs": [], "status": "PENDING", "createdAt": now_ms(), "updatedAt": now_ms(),
     })
     existing = next((p for p in store.all("professionals") if p.get("userId") == uid), None)
@@ -522,16 +688,26 @@ def a_submitVerificationRequest(store, uid, args):
 def a_addChild(store, uid, args):
     _require(uid)
     store.put("children", {
-        "id": new_id("c"), "familyUserId": uid, "nickname": _s(args.get("nickname")) or None,
-        "ageRange": args.get("ageRange") or "UNSPECIFIED", "interests": args.get("interests") or [],
+        "id": new_id("c"), "familyUserId": uid, "nickname": _s(args.get("nickname"))[:60] or None,
+        "ageRange": args.get("ageRange") or "UNSPECIFIED",
+        "interests": [_s(i)[:40] for i in (args.get("interests") or [])[:20] if isinstance(i, str)],
         "isPublic": False, "createdAt": now_ms(), "updatedAt": now_ms(),
     })
 
 
 def a_deleteChild(store, uid, args):
     _require(uid)
-    store.delete_where("children",
-                       lambda c: c.get("id") == args.get("childId") and c.get("familyUserId") == uid)
+    cid = args.get("childId")
+    mine = next((c for c in store.all("children") if c.get("id") == cid and c.get("familyUserId") == uid), None)
+    if not mine:
+        return
+    store.delete("children", cid)
+    for kind, spec in REC_KINDS.items():  # everything recorded for this child goes with it
+        if "childId" in spec["fields"]:
+            for d in list(store.all("r_" + kind)):
+                if d.get("ownerId") == uid and d.get("childId") == cid:
+                    _delete_rec(store, kind, d)
+    store.delete_where("shares", lambda sh: sh.get("ownerId") == uid and sh.get("childId") == cid)
 
 
 def a_exportMyData(store, uid, args):
@@ -554,6 +730,15 @@ def a_exportMyData(store, uid, args):
     return {"text": "\n".join(lines)}
 
 
+def _unlink_file(doc):
+    ext = UPLOAD_TYPES.get(doc.get("mime"))
+    if ext:
+        try:
+            os.remove(os.path.join(UPLOAD_DIR, "%s.%s" % (doc["id"], ext)))
+        except OSError:
+            pass
+
+
 def a_deleteAccount(store, uid, args):
     _require(uid)
     u = store.get("users", uid)
@@ -561,6 +746,7 @@ def a_deleteAccount(store, uid, args):
         raise ApiError("حساب یافت نشد.")
     if u.get("email"):
         remove_cred(u["email"])
+        store.delete("resets", _reset_key(u["email"]))
     store.delete("users", uid)
     store.delete_where("professionals", lambda p: p.get("userId") == uid)
     store.delete_where("verifications", lambda v: v.get("userId") == uid)
@@ -570,6 +756,33 @@ def a_deleteAccount(store, uid, args):
     my_convs = [c["id"] for c in store.all("conversations") if uid in (c.get("participantIds") or [])]
     store.delete_where("messages", lambda msg: msg.get("conversationId") in my_convs)
     store.delete_where("conversations", lambda c: uid in (c.get("participantIds") or []))
+    store.delete_where("pushTokens", lambda t: t.get("userId") == uid)
+    store.delete_where("reports", lambda r: r.get("reporterId") == uid)
+    store.delete_where("shares", lambda sh: sh.get("ownerId") == uid or sh.get("redeemedBy") == uid)
+    # Records kept in the generic r_* collections (child file, tools, booking...). A slot the user
+    # had booked goes back on the market instead of being deleted.
+    for kind in REC_KINDS:
+        for d in list(store.all("r_" + kind)):
+            if d.get("ownerId") == uid:
+                store.delete("r_" + kind, d["id"])
+            elif kind == "slot" and d.get("bookedBy") == uid:
+                d.update(status="OPEN", bookedBy="", bookedByName="", updatedAt=now_ms())
+                store.put("r_slot", d)
+    # Donations: own listings go; requests/reservations made by the user are withdrawn.
+    store.delete_where("donations", lambda d: d.get("ownerId") == uid)
+    for d in store.all("donations"):
+        if any(r.get("userId") == uid for r in d.get("requests") or []) or d.get("recipientId") == uid:
+            d["requests"] = [r for r in d.get("requests") or [] if r.get("userId") != uid]
+            if d.get("recipientId") == uid:
+                d["recipientId"] = None
+                if d.get("status") == "RESERVED":
+                    d["status"] = "AVAILABLE"
+            store.put("donations", d)
+    # Uploaded files: bytes and docs.
+    for f in list(store.all("files")):
+        if f.get("ownerId") == uid:
+            _unlink_file(f)
+            store.delete("files", f["id"])
     # Anonymize public contributions so threads stay readable.
     for q in store.all("questions"):
         if q.get("authorId") == uid:
@@ -577,8 +790,14 @@ def a_deleteAccount(store, uid, args):
             q["isAnonymous"] = True
             store.put("questions", q)
     for a in store.all("answers"):
+        changed = False
         if a.get("authorId") == uid:
             a["authorId"] = DELETED_USER_ID
+            changed = True
+        if uid in (a.get("helpfulByUserIds") or []):
+            a["helpfulByUserIds"] = [x for x in a["helpfulByUserIds"] if x != uid]
+            changed = True
+        if changed:
             store.put("answers", a)
     for p in store.all("posts"):
         if p.get("authorId") == uid:
@@ -949,12 +1168,21 @@ def a_upsertGuide(store, uid, args):
 
 # ---- Reports ----
 
+REPORT_TYPES = {"QUESTION", "ANSWER", "GROUP_POST", "MESSAGE", "USER", "GUIDE", "DONATION"}
+REPORT_STATUSES = {"OPEN", "UNDER_REVIEW", "ACTIONED", "DISMISSED"}
+
+
 def a_createReport(store, uid, args):
     _require(uid)
+    ctype, cid = args.get("contentType"), args.get("contentId")
+    if ctype not in REPORT_TYPES or not isinstance(cid, str) or not cid or len(cid) > 80:
+        raise ApiError("گزارش نامعتبر است.")
+    if not RL.allow("report:" + uid, 30, 3600):
+        raise ApiError(TOO_MANY)
     store.put("reports", {
-        "id": new_id("r"), "reporterId": uid, "contentType": args.get("contentType"),
-        "contentId": args.get("contentId"), "reason": args.get("reason"),
-        "note": _s(args.get("note")) or None, "status": "OPEN",
+        "id": new_id("r"), "reporterId": uid, "contentType": ctype,
+        "contentId": cid, "reason": _s(args.get("reason"))[:40],
+        "note": _s(args.get("note"))[:1000] or None, "status": "OPEN",
         "createdAt": now_ms(), "updatedAt": now_ms(),
     })
 
@@ -967,6 +1195,8 @@ def a_resolveReport(store, uid, args):
     if not rep:
         raise ApiError("گزارش یافت نشد.")
     note = _s(args.get("resolutionNote"))
+    if args.get("newStatus") not in REPORT_STATUSES:
+        raise ApiError("وضعیت گزارش نامعتبر است.")
     rep["status"] = args.get("newStatus")
     rep["resolutionNote"] = note
     rep["reviewedByAdminId"] = uid
@@ -1000,9 +1230,14 @@ def a_registerPush(store, uid, args):
     token = _s(args.get("token"))
     if not token:
         raise ApiError("توکن دستگاه خالی است.")
+    if len(token) > 4096 or not re.fullmatch(r"[A-Za-z0-9:_\-.]+", token):
+        raise ApiError("توکن دستگاه نامعتبر است.")
+    if sum(1 for t in store.all("pushTokens") if t.get("userId") == uid) >= 10 \
+            and not store.get("pushTokens", token):
+        raise ApiError("تعداد دستگاه‌های ثبت‌شده به سقف رسیده است.")
     # doc id = token, so re-registering (incl. moving to another account) just overwrites.
     store.put("pushTokens", {
-        "id": token, "userId": uid, "platform": args.get("platform") or "android",
+        "id": token, "userId": uid, "platform": _s(args.get("platform"))[:20] or "android",
         "updatedAt": now_ms(),
     })
 
@@ -1017,8 +1252,19 @@ def a_unregisterPush(store, uid, args):
 
 # ---- Admin (audited) ----
 
+CLIENT_ACTION_TYPES = {"VERIFY_PROFESSIONAL", "REJECT_PROFESSIONAL", "REQUEST_MORE_INFO", "VIEW_CREDENTIAL",
+                       "HIDE_CONTENT", "DELETE_CONTENT", "LIMIT_ACCOUNT", "BLOCK_ACCOUNT", "RESOLVE_REPORT",
+                       "PUBLISH_GUIDE"}
+
+
+CLIENT_CONTENT_TYPES = {"QUESTION", "ANSWER", "GROUP_POST", "MESSAGE", "USER", "GUIDE"}
+
+
 def _log_admin(store, admin_id, action_type, target_type, target_id, reason):
-    store.put("adminActions", {
+    # Types the app's enum doesn't know would break decoding of the admin log, so they go to a
+    # server-side audit collection that is never sent to clients.
+    coll = "adminActions" if action_type in CLIENT_ACTION_TYPES and target_type in CLIENT_CONTENT_TYPES else "adminAudit"
+    store.put(coll, {
         "id": new_id("aa"), "adminId": admin_id, "actionType": action_type,
         "targetType": target_type, "targetId": target_id, "reason": reason, "createdAt": now_ms(),
     })
@@ -1058,6 +1304,12 @@ def a_reviewVerification(store, uid, args):
             p["verificationStatus"] = decision
             p["updatedAt"] = now_ms()
             store.put("professionals", p)
+    if decision == "VERIFIED":  # accounts register as FAMILY; approval grants the professional type
+        tu = store.get("users", req["userId"])
+        if tu and tu.get("accountType") not in PRO_TYPES:
+            tu["accountType"] = req.get("requestedType") or "PROFESSIONAL"
+            tu["updatedAt"] = now_ms()
+            store.put("users", tu)
     _log_admin(store, uid, action_type, "USER", req["userId"], reason)
     label = {"VERIFIED": "تأییدشده", "REJECTED": "ردشده", "PENDING": "در انتظار بررسی",
              "MORE_INFO_NEEDED": "نیازمند اطلاعات بیشتر", "NONE": "بدون درخواست"}.get(decision, decision)
@@ -1071,12 +1323,20 @@ def _set_content_status(store, uid, ctype, cid, status, action, reason):
     if not _s(reason):
         raise ApiError("ثبت دلیل تصمیم الزامی است.")
     coll = {"QUESTION": "questions", "ANSWER": "answers", "GROUP_POST": "posts",
-            "GUIDE": "guides"}.get(ctype)
+            "GUIDE": "guides", "DONATION": "donations"}.get(ctype)
     if coll:
         doc = store.get(coll, cid)
         if doc:
             doc["status"] = status
             store.put(coll, doc)
+    elif ctype == "USER":  # hide -> limit the account, delete -> block it (never touches admins)
+        tu = store.get("users", cid)
+        if tu and not tu.get("isAdmin"):
+            tu["status"] = "LIMITED" if status == "HIDDEN" else "BLOCKED"
+            tu["updatedAt"] = now_ms()
+            store.put("users", tu)
+    else:
+        raise ApiError("نوع محتوا نامعتبر است.")
     _log_admin(store, uid, action, ctype, cid, _s(reason))
 
 
@@ -1100,12 +1360,16 @@ def a_setAccountStatus(store, uid, args):
     if not reason:
         raise ApiError("ثبت دلیل تصمیم الزامی است.")
     status = args.get("status")
+    if status not in ("ACTIVE", "LIMITED", "BLOCKED", "PENDING_REVIEW"):
+        raise ApiError("وضعیت حساب نامعتبر است.")
     target = store.get("users", args.get("userId"))
+    if target and target.get("isAdmin") and status != "ACTIVE":
+        raise ApiError("وضعیت حساب مدیر تغییر نمی‌کند.")
     if target:
         target["status"] = status
         target["updatedAt"] = now_ms()
         store.put("users", target)
-    action = "BLOCK_ACCOUNT" if status == "BLOCKED" else "LIMIT_ACCOUNT"
+    action = "BLOCK_ACCOUNT" if status == "BLOCKED" else ("RESTORE_ACCOUNT" if status == "ACTIVE" else "LIMIT_ACCOUNT")
     _log_admin(store, uid, action, "USER", args.get("userId"), reason)
 
 
@@ -1118,7 +1382,6 @@ _FILE_ID_RE = None
 
 
 def _file_ids(urls):
-    import re
     out = []
     for u in (urls or [])[:4]:
         m = re.search(r"files/([0-9a-f]{32})$", str(u))
@@ -1142,9 +1405,11 @@ def _donation_view(store, d, uid):
     return v
 
 
-def _donation(store, did):
+def _donation(store, did, uid=None):
     d = store.get("donations", did)
     if not d or d.get("status") == "REMOVED":
+        raise ApiError("این آگهی در دسترس نیست.")
+    if d.get("status") == "HIDDEN" and not (uid and (d.get("ownerId") == uid or is_admin(store, uid))):
         raise ApiError("این آگهی در دسترس نیست.")
     return d
 
@@ -1155,6 +1420,8 @@ def a_donationList(store, uid, args):
     items = []
     for d in store.all("donations"):
         if d.get("status") == "REMOVED":
+            continue
+        if d.get("status") == "HIDDEN" and d.get("ownerId") != uid and not is_admin(store, uid):
             continue
         if mine != (d.get("ownerId") == uid):
             if mine or d.get("status") == "GIVEN":
@@ -1171,7 +1438,7 @@ def a_donationList(store, uid, args):
 
 def a_donationGet(store, uid, args):
     _require(uid)
-    return {"item": _donation_view(store, _donation(store, args.get("id")), uid)}
+    return {"item": _donation_view(store, _donation(store, args.get("id"), uid), uid)}
 
 
 def a_donationCreate(store, uid, args):
@@ -1191,11 +1458,13 @@ def a_donationCreate(store, uid, args):
     mine_open = [d for d in store.all("donations") if d.get("ownerId") == uid and d.get("status") in ("AVAILABLE", "RESERVED")]
     if len(mine_open) >= 20:
         raise ApiError("حداکثر ۲۰ آگهی فعال می‌توانید داشته باشید.")
+    imgs = _file_ids(args.get("imageUrls"))
+    _check_file_ownership(store, uid, imgs, image_only=True)
     did = new_id("don")
     store.put("donations", {
         "id": did, "ownerId": uid, "ownerName": me.get("displayName", ""), "title": title,
         "description": desc, "category": cat, "condition": cond, "city": _s(args.get("city"))[:60],
-        "imageIds": _file_ids(args.get("imageUrls")), "status": "AVAILABLE", "requests": [],
+        "imageIds": imgs, "status": "AVAILABLE", "requests": [],
         "recipientId": None, "createdAt": now_ms(), "updatedAt": now_ms(),
     })
     return {"id": did}
@@ -1203,7 +1472,7 @@ def a_donationCreate(store, uid, args):
 
 def a_donationRequest(store, uid, args):
     _require(uid)
-    d = _donation(store, args.get("id"))
+    d = _donation(store, args.get("id"), uid)
     if d["ownerId"] == uid:
         raise ApiError("این آگهی مال خودتان است.")
     if d["status"] != "AVAILABLE":
@@ -1220,9 +1489,11 @@ def a_donationRequest(store, uid, args):
 
 
 def _donation_owner(store, uid, did):
-    d = _donation(store, did)
+    d = _donation(store, did, uid)
     if d["ownerId"] != uid and not is_admin(store, uid):
         raise ApiError("فقط اهداکننده می‌تواند این کار را انجام دهد.")
+    if d.get("status") == "HIDDEN" and not is_admin(store, uid):
+        raise ApiError("این آگهی توسط مدیر مخفی شده است.")
     return d
 
 
@@ -1259,6 +1530,10 @@ def a_donationRemove(store, uid, args):
     d = _donation_owner(store, uid, args.get("id"))
     d["status"], d["updatedAt"] = "REMOVED", now_ms()
     store.put("donations", d)
+    for fid in d.get("imageIds") or []:  # files belong to the donation's OWNER, even if an admin removes it
+        _drop_file(store, d["ownerId"], fid)
+    d["imageIds"] = []
+    store.put("donations", d)
 
 
 
@@ -1294,19 +1569,35 @@ def a_setFeatureEnabled(store, uid, args):
 # ---- Generic records: child file, tools, booking, courses, places/events ----
 
 REC_KINDS = {
-    "diary":    {"mod": "childfile", "scope": "own",   "req": "note",  "fields": ["childName", "date", "mood", "note"]},
-    "med":      {"mod": "childfile", "scope": "own",   "req": "name",  "fields": ["childName", "name", "dose", "times", "notes"]},
-    "schedule": {"mod": "tools",     "scope": "own",   "req": "title", "fields": ["title", "steps"]},
-    "story":    {"mod": "tools",     "scope": "own",   "req": "title", "fields": ["title", "pages"]},
+    "diary":    {"mod": "childfile", "scope": "own",   "req": "note",  "fields": ["childId", "childName", "date", "mood", "note"], "child": "optional"},
+    "med":      {"mod": "childfile", "scope": "own",   "req": "name",  "fields": ["childId", "childName", "name", "dose", "times", "notes"], "child": "optional"},
+    "schedule": {"mod": "tools",     "scope": "own",   "req": "title", "fields": ["title", "steps", "cover", "stepImages"], "files": ["cover"], "lists": ["stepImages"]},
+    "story":    {"mod": "tools",     "scope": "own",   "req": "title", "fields": ["title", "pages", "cover", "pageImages"], "files": ["cover"], "lists": ["pageImages"]},
     "aac":      {"mod": "tools",     "scope": "own",   "req": "text",  "fields": ["text", "emoji", "image", "audio", "builtin", "childId"], "files": ["image", "audio"]},
+    "log":      {"mod": "childfile", "scope": "own",   "req": "type",  "fields": ["childId", "date", "time", "type", "intensity", "durationMin", "trigger", "notes"],
+                 "child": "required", "cap": 3000, "limit": 600,
+                 "enums": {"type": ("meltdown", "sleep", "seizure", "meal", "trigger", "other")},
+                 "ints": {"intensity": (1, 5), "durationMin": (0, 1440)}},
+    "reward":   {"mod": "childfile", "scope": "own",   "req": "title", "fields": ["childId", "title", "emoji", "goal", "stars"],
+                 "child": "required", "ints": {"goal": (1, 50), "stars": (0, 50)}},
+    "firstthen": {"mod": "childfile", "scope": "own",  "req": "first", "fields": ["childId", "first", "then", "firstEmoji", "thenEmoji", "firstImage", "thenImage"],
+                  "child": "required", "files": ["firstImage", "thenImage"]},
+    "emergency": {"mod": "childfile", "scope": "own",  "req": "name",
+                  "fields": ["childId", "name", "diagnosis", "sensory", "triggers", "calming", "medical",
+                             "contact1Name", "contact1Phone", "contact2Name", "contact2Phone", "photo"],
+                  "child": "required", "files": ["photo"]},
     "slot":     {"mod": "booking",   "scope": "pro",   "req": "when",  "fields": ["when", "duration", "place", "note"]},
     "course":   {"mod": "courses",   "scope": "admin", "req": "title", "fields": ["title", "description", "level", "lessons"]},
     "place":    {"mod": "places",    "scope": "admin", "req": "name",  "fields": ["name", "type", "city", "address", "phone", "lat", "lng", "note"]},
     "event":    {"mod": "places",    "scope": "admin", "req": "title", "fields": ["title", "date", "city", "address", "description", "link"]},
 }
-REC_LONG = {"note", "notes", "steps", "pages", "lessons", "description"}
+REC_LONG = {"note", "notes", "steps", "pages", "lessons", "description", "diagnosis", "sensory",
+            "triggers", "calming", "medical"}
 REC_PER_USER = 300
 ROLES = ["FAMILY", "PROFESSIONAL", "EDUCATOR", "SOCIAL_WORKER", "COMMUNITY"]
+HEX32 = re.compile(r"[0-9a-f]{32}")
+ZERO_ID = "0" * 32  # list-field placeholder: "no image for this step/page"
+MAX_LIST_LINES = 60
 
 
 def module_roles(store):
@@ -1333,6 +1624,8 @@ def module_of(name, args):
         return k["mod"] if k else None
     if name in ("slotBook", "slotCancel"):
         return "booking"
+    if name == "shareCreate":
+        return "childfile"
     return None
 
 
@@ -1360,12 +1653,15 @@ def a_recList(store, uid, args):
     _require(uid)
     kind, spec = _rec_kind(args)
     mine, booked = bool(args.get("mine")), bool(args.get("booked"))
+    child = _s(args.get("childId")) if isinstance(args.get("childId"), str) else ""
     items = []
     for d in store.all("r_" + kind):
         if d.get("status") == "REMOVED":
             continue
         own = d.get("ownerId") == uid
         if spec["scope"] == "own" and not own:
+            continue
+        if child and "childId" in spec["fields"] and d.get("childId") != child:
             continue
         if kind == "slot":
             if booked and d.get("bookedBy") != uid:
@@ -1378,21 +1674,94 @@ def a_recList(store, uid, args):
             continue
         items.append(d)
     items.sort(key=lambda d: d.get("createdAt", 0), reverse=True)
-    return {"items": [_rec_view(store, d, uid, kind) for d in items[:200]]}
+    return {"items": [_rec_view(store, d, uid, kind) for d in items[:spec.get("limit", 200)]]}
+
+
+def _file_doc(store, fid):
+    return store.get("files", fid) if isinstance(fid, str) and HEX32.fullmatch(fid) else None
 
 
 def _drop_file(store, uid, fid):
-    """Delete an uploaded file (doc + bytes) if the caller owns it."""
-    doc = store.get("files", fid) if re.fullmatch(r"[0-9a-f]{32}", fid or "") else None
+    """Delete an uploaded file (doc + bytes) if `uid` owns it."""
+    doc = _file_doc(store, fid)
     if not doc or doc.get("ownerId") != uid:
         return
-    ext = UPLOAD_TYPES.get(doc.get("mime"))
-    if ext:
-        try:
-            os.remove(os.path.join(UPLOAD_DIR, "%s.%s" % (fid, ext)))
-        except OSError:
-            pass
+    _unlink_file(doc)
     store.delete("files", fid)
+
+
+def _check_file_ownership(store, uid, ids, image_only=False, admin=False):
+    """Every referenced file must exist and belong to the caller (admins are exempt)."""
+    for fid in ids:
+        doc = _file_doc(store, fid)
+        if not doc:
+            raise ApiError("فایل پیوست‌شده پیدا نشد.")
+        if not admin and doc.get("ownerId") != uid:
+            raise ApiError("فایل پیوست‌شده متعلق به شما نیست.")
+        if image_only and not str(doc.get("mime", "")).startswith("image/"):
+            raise ApiError("فقط تصویر می‌توان پیوست کرد.")
+
+
+def _split_ids(v):
+    return [x.strip() for x in str(v or "").split("\n")]
+
+
+def _rec_file_ids(spec, d):
+    ids = [d.get(f) for f in spec.get("files", []) if d.get(f)]
+    for f in spec.get("lists", []):
+        ids += [x for x in _split_ids(d.get(f)) if x and x != ZERO_ID]
+    return ids
+
+
+def _str_field(v, f, is_list):
+    if v is None:
+        return ""
+    if isinstance(v, bool):
+        raise ApiError("مقدار یکی از فیلدها نامعتبر است.")
+    if isinstance(v, (int, float)):
+        return str(int(v)) if float(v).is_integer() else str(v)
+    if isinstance(v, list) and is_list:
+        return "\n".join(str(x).strip() for x in v)
+    if isinstance(v, str):
+        return v.strip() if not is_list else "\n".join(x.strip() for x in v.split("\n")).rstrip("\n")
+    raise ApiError("مقدار یکی از فیلدها نامعتبر است.")
+
+
+def _clean_rec(store, owner_uid, spec, data):
+    clean = {}
+    lists = spec.get("lists", [])
+    for f in spec["fields"]:
+        v = _str_field(data.get(f), f, f in lists)
+        if len(v) > (5000 if f in REC_LONG else (4000 if f in lists else 200)):
+            raise ApiError("متن یکی از فیلدها بیش از حد طولانی است.")
+        if f in spec.get("files", []) and v and not HEX32.fullmatch(v):
+            raise ApiError("شناسهٔ فایل نامعتبر است.")
+        if f in lists and v:
+            lines = v.split("\n")
+            if len(lines) > MAX_LIST_LINES or any(x and not HEX32.fullmatch(x) for x in lines):
+                raise ApiError("فهرست شناسهٔ فایل‌ها نامعتبر است.")
+        if v and f in spec.get("enums", {}) and v not in spec["enums"][f]:
+            raise ApiError("مقدار «%s» نامعتبر است." % f)
+        if v and f in spec.get("ints", {}):
+            lo, hi = spec["ints"][f]
+            if not v.isdigit() or not lo <= int(v) <= hi:
+                raise ApiError("مقدار «%s» باید عددی بین %d و %d باشد." % (f, lo, hi))
+            v = str(int(v))
+        clean[f] = v
+    mode = spec.get("child")
+    if mode and (clean.get("childId") or mode == "required"):
+        cid = clean.get("childId")
+        if not any(c.get("id") == cid and c.get("familyUserId") == owner_uid for c in store.all("children")):
+            raise ApiError("پروفایل کودک پیدا نشد.")
+    if not clean[spec["req"]]:
+        raise ApiError("فیلد اصلی را پر کنید.")
+    return clean
+
+
+def _delete_rec(store, kind, d):
+    for fid in _rec_file_ids(REC_KINDS[kind], d):
+        _drop_file(store, d.get("ownerId"), fid)
+    store.delete("r_" + kind, d["id"])
 
 
 def a_recSave(store, uid, args):
@@ -1407,28 +1776,25 @@ def a_recSave(store, uid, args):
     if spec["scope"] == "pro" and not (admin or me.get("accountType") in PRO_TYPES):
         raise ApiError("فقط متخصصان می‌توانند نوبت ثبت کنند.")
     data = args.get("data") or {}
-    clean = {}
-    for f in spec["fields"]:
-        v = _s(data.get(f))
-        if len(v) > (5000 if f in REC_LONG else 200):
-            raise ApiError("متن یکی از فیلدها بیش از حد طولانی است.")
-        if f in spec.get("files", []) and v and not re.fullmatch(r"[0-9a-f]{32}", v):
-            raise ApiError("شناسهٔ فایل نامعتبر است.")
-        clean[f] = v
-    if not clean[spec["req"]]:
-        raise ApiError("فیلد اصلی را پر کنید.")
+    if not isinstance(data, dict):
+        raise ApiError("داده نامعتبر است.")
     rid = _s(args.get("id"))
     d = store.get("r_" + kind, rid) if rid else None
+    if d and d.get("ownerId") != uid and not admin:
+        raise ApiError("اجازهٔ ویرایش ندارید.")
+    owner = d["ownerId"] if d else uid
+    clean = _clean_rec(store, owner, spec, data)
+    new_files = _rec_file_ids(spec, clean)
+    if spec["scope"] == "own" or new_files:
+        _check_file_ownership(store, owner, new_files, admin=admin and owner != uid)
     if d:
-        if d.get("ownerId") != uid and not admin:
-            raise ApiError("اجازهٔ ویرایش ندارید.")
-        for f in spec.get("files", []):
-            if d.get(f) and d.get(f) != clean.get(f):
-                _drop_file(store, uid, d[f])
+        gone = set(_rec_file_ids(spec, d)) - set(new_files)
         d.update(clean)
         d["updatedAt"] = now_ms()
+        for fid in gone:  # files always belong to the record's OWNER, also when an admin edits
+            _drop_file(store, owner, fid)
     else:
-        if sum(1 for x in store.all("r_" + kind) if x.get("ownerId") == uid) >= REC_PER_USER:
+        if sum(1 for x in store.all("r_" + kind) if x.get("ownerId") == uid) >= spec.get("cap", REC_PER_USER):
             raise ApiError("به سقف تعداد رسیدید.")
         d = dict(clean, id=new_id("r"), ownerId=uid, ownerName=me.get("displayName", ""),
                  status="OPEN" if kind == "slot" else "ACTIVE", createdAt=now_ms(), updatedAt=now_ms())
@@ -1447,10 +1813,7 @@ def a_recDelete(store, uid, args):
     if kind == "slot" and d.get("bookedBy"):
         add_notification(store, d["bookedBy"], "BOOKING", "نوبت لغو شد",
                          "متخصص نوبت «%s» را حذف کرد." % d.get("when", ""), d["id"])
-    for f in REC_KINDS[kind].get("files", []):
-        if d.get(f):
-            _drop_file(store, d.get("ownerId"), d[f])
-    store.delete("r_" + kind, d["id"])
+    _delete_rec(store, kind, d)
 
 
 def _slot(store, args):
@@ -1556,7 +1919,572 @@ def set_module_roles(store, fid, roles):
     store.put("config", doc)
 
 
-LIGHT_PREFIXES = ("a_donation", "a_rec", "a_slot", "a_search")
+# ---- Password reset by emailed code -----------------------------------------------------
+
+RESET_TTL_MS = 30 * 60 * 1000
+RESET_MAX_TRIES = 5
+EMAIL_RE = re.compile(r"^[^@\s<>\"',;:()\[\]\\]+@[^@\s<>\"',;:()\[\]\\]+\.[^@\s<>\"',;:()\[\]\\]+$")
+_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+RLM = "‏"
+
+
+def _reset_key(email):
+    return hashlib.sha256(email.strip().lower().encode("utf-8")).hexdigest()[:32]
+
+
+def _code_hash(email, code):
+    return hmac.new(JWT_SECRET, ("reset|%s|%s" % (email.strip().lower(), code)).encode("utf-8"),
+                    hashlib.sha256).hexdigest()
+
+
+def _issue_reset(store, email, uid):
+    mail = email.strip().lower()
+    code = "%08d" % secrets.randbelow(10 ** 8)
+    store.put("resets", {"id": _reset_key(mail), "email": mail, "uid": uid,
+                         "codeHash": _code_hash(mail, code), "expiresAt": now_ms() + RESET_TTL_MS,
+                         "tries": 0, "createdAt": now_ms()})
+    return code
+
+
+def smtp_configured():
+    return bool(SMTP_HOST and SMTP_FROM)
+
+
+def send_mail(to, subject, body):
+    """Send a UTF-8 plain-text mail through SMTP_* (SSL on 465, STARTTLS otherwise). Raises on failure."""
+    import smtplib
+    import ssl
+    from email.message import EmailMessage
+    from email.utils import formatdate, make_msgid, parseaddr
+    if not smtp_configured():
+        raise RuntimeError("SMTP not configured")
+    if not EMAIL_RE.match(to):
+        raise ValueError("bad recipient")
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = SMTP_FROM
+    msg["To"] = to
+    msg["Date"] = formatdate(localtime=True)
+    dom = parseaddr(SMTP_FROM)[1].rpartition("@")[2] or "localhost"
+    msg["Message-ID"] = make_msgid(domain=dom)
+    msg.set_content(body, charset="utf-8")
+    ctx = ssl.create_default_context()
+    if SMTP_PORT == 465:
+        s = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=20, context=ctx)
+    else:
+        s = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20)
+    try:
+        s.ehlo()
+        if SMTP_PORT != 465 and (SMTP_PORT != 25 or s.has_extn("starttls")):
+            s.starttls(context=ctx)
+            s.ehlo()
+        if SMTP_USER:
+            s.login(SMTP_USER, SMTP_PASS)
+        s.send_message(msg, from_addr=parseaddr(SMTP_FROM)[1] or SMTP_FROM, to_addrs=[to])
+    finally:
+        try:
+            s.quit()
+        except Exception:
+            pass
+
+
+def _reset_mail_text(code):
+    lines = [
+        "سلام،",
+        "برای بازیابی رمز عبور حساب «همراهِ طیف» این کد را در برنامه وارد کنید:",
+        "",
+        "کد بازیابی: %s" % code,
+        "",
+        "این کد %d دقیقه اعتبار دارد و فقط یک بار قابل استفاده است." % (RESET_TTL_MS // 60000),
+        "اگر شما درخواست بازیابی نکرده‌اید، این ایمیل را نادیده بگیرید؛ رمز شما تغییری نمی‌کند.",
+        "",
+        "همراهِ طیف",
+    ]
+    return "\n".join((RLM + ln) if ln else "" for ln in lines)
+
+
+def _mail_reset_worker(mail, code):
+    try:
+        send_mail(mail, "کد بازیابی رمز عبور — همراهِ طیف", _reset_mail_text(code))
+    except Exception as e:
+        log("reset mail failed: %s: %s" % (type(e).__name__, e))
+
+
+def do_forgot(args, ip):
+    mail = _s(args.get("email")).lower()
+    if not EMAIL_RE.match(mail) or len(mail) > 120:
+        return {"ok": True}
+    if not RL.allow("forgot-ip:" + ip, 10, 3600):
+        raise ApiError(TOO_MANY)
+    if not RL.allow("forgot-mail:" + mail, 3, 3600):
+        return {"ok": True}  # silently capped: never reveal anything about the account
+    uid = cred_uid(mail)
+    if uid:
+        with MUT_LOCK:
+            store = Store()
+            u = store.get("users", uid)
+            if u and u.get("status") not in ("BLOCKED", "DELETED"):
+                if smtp_configured():
+                    code = _issue_reset(store, mail, uid)
+                    threading.Thread(target=_mail_reset_worker, args=(mail, code), daemon=True).start()
+                else:
+                    log("SMTP not configured - password-reset code NOT sent (admin can use adminIssueReset)")
+    return {"ok": True}
+
+
+def do_reset(args, ip):
+    mail = _s(args.get("email")).lower()
+    code = _s(args.get("code")).translate(_DIGITS)
+    pw = args.get("newPassword")
+    if not RL.allow("reset-ip:" + ip, 20, 3600):
+        raise ApiError(TOO_MANY)
+    if not isinstance(pw, str) or len(pw) < 6:
+        raise ApiError("رمز عبور باید حداقل ۶ نویسه باشد.")
+    if len(pw) > MAX_PASSWORD:
+        raise ApiError("رمز عبور بیش از حد طولانی است.")
+    bad = ApiError("کد نامعتبر است یا منقضی شده.")
+    if not EMAIL_RE.match(mail) or not code.isdigit() or len(code) != 8:
+        raise bad
+    with MUT_LOCK:
+        store = Store()
+        doc = store.get("resets", _reset_key(mail))
+        if not doc:
+            raise bad
+        if doc.get("expiresAt", 0) < now_ms():
+            store.delete("resets", doc["id"])
+            raise bad
+        if not hmac.compare_digest(doc.get("codeHash", ""), _code_hash(mail, code)):
+            doc["tries"] = doc.get("tries", 0) + 1
+            if doc["tries"] >= RESET_MAX_TRIES:
+                store.delete("resets", doc["id"])
+            else:
+                store.put("resets", doc)
+            raise bad
+        uid = cred_uid(mail)
+        u = store.get("users", uid) if uid else None
+        if not u or uid != doc.get("uid") or u.get("status") in ("BLOCKED", "DELETED"):
+            store.delete("resets", doc["id"])
+            raise bad
+        set_cred(mail, pw, uid)
+        u["tokensValidAfter"] = int(time.time())
+        u["updatedAt"] = now_ms()
+        store.put("users", u)
+        store.delete("resets", doc["id"])
+    return {"ok": True}
+
+
+def _need_admin(store, uid):
+    _require(uid)
+    if not is_admin(store, uid):
+        raise ApiError("دسترسی مدیر لازم است.")
+
+
+def a_adminIssueReset(store, uid, args):
+    """Fallback when email is unavailable: the admin gets a one-time code to relay to the user."""
+    _need_admin(store, uid)
+    target = store.get("users", _s(args.get("userId"))) if args.get("userId") else None
+    if not target:
+        mail = _s(args.get("email")).lower()
+        target = next((x for x in store.all("users") if (x.get("email") or "").lower() == mail), None) if mail else None
+    if not target or not target.get("email"):
+        raise ApiError("کاربر پیدا نشد.")
+    if target.get("isAdmin") and target["id"] != uid:
+        raise ApiError("بازنشانی رمز مدیر دیگر از این مسیر ممکن نیست.")
+    code = _issue_reset(store, target["email"], target["id"])
+    _log_admin(store, uid, "ISSUE_RESET", "USER", target["id"], "صدور کد بازیابی رمز")
+    return {"code": code, "email": target["email"], "expiresInMinutes": RESET_TTL_MS // 60000}
+
+
+def a_logoutAllDevices(store, uid, args):
+    _require(uid)
+    u = store.get("users", uid)
+    if not u:
+        raise ApiError("حساب یافت نشد.")
+    u["tokensValidAfter"] = int(time.time()) + 1  # the caller's own next login gets a later iat
+    store.put("users", u)
+
+
+# ---- Admin console ------------------------------------------------------------------------
+
+def a_adminStats(store, uid, args):
+    _need_admin(store, uid)
+    now = now_ms()
+    day = 86400000
+    users = store.all("users")
+
+    def count_by(items, key):
+        out = {}
+        for it in items:
+            k = it.get(key) or "-"
+            out[k] = out.get(k, 0) + 1
+        return out
+
+    files = store.all("files")
+    return {
+        "users": {
+            "total": len(users),
+            "byType": count_by(users, "accountType"),
+            "byStatus": count_by(users, "status"),
+            "new7d": sum(1 for u in users if u.get("joinedAt", 0) >= now - 7 * day),
+            "new30d": sum(1 for u in users if u.get("joinedAt", 0) >= now - 30 * day),
+            "active7d": sum(1 for u in users if u.get("lastSeenAt", 0) >= now - 7 * day),
+            "active30d": sum(1 for u in users if u.get("lastSeenAt", 0) >= now - 30 * day),
+        },
+        "content": {
+            "questions": sum(1 for q in store.all("questions") if q.get("status") != "REMOVED"),
+            "answers": sum(1 for a in store.all("answers") if a.get("status") != "REMOVED"),
+            "groups": len(store.all("groups")),
+            "posts": sum(1 for p in store.all("posts") if p.get("status") == "PUBLISHED"),
+            "guides": sum(1 for g in store.all("guides") if g.get("status") == "PUBLISHED"),
+            "children": len(store.all("children")),
+            "conversations": len(store.all("conversations")),
+            "donations": count_by(store.all("donations"), "status"),
+        },
+        "moderation": {
+            "openReports": sum(1 for r in store.all("reports") if r.get("status") in ("OPEN", "UNDER_REVIEW")),
+            "pendingVerifications": sum(1 for v in store.all("verifications") if v.get("status") == "PENDING"),
+        },
+        "records": {k: sum(1 for d in store.all("r_" + k) if d.get("status") != "REMOVED") for k in REC_KINDS},
+        "files": {"count": len(files), "bytes": sum(int(f.get("size", 0) or 0) for f in files)},
+        "smtpConfigured": smtp_configured(),
+        "generatedAt": now,
+    }
+
+
+def a_adminListUsers(store, uid, args):
+    _need_admin(store, uid)
+    q = _s(args.get("q")).lower()[:80]
+    status, atype = _s(args.get("status")), _s(args.get("accountType"))
+    try:
+        offset = max(0, int(args.get("offset") or 0))
+        limit = min(100, max(1, int(args.get("limit") or 50)))
+    except (TypeError, ValueError):
+        raise ApiError("پارامتر نامعتبر است.")
+    rows = []
+    for u in store.all("users"):
+        if status and u.get("status") != status:
+            continue
+        if atype and u.get("accountType") != atype:
+            continue
+        if q and q not in (u.get("displayName") or "").lower() and q not in (u.get("email") or "").lower():
+            continue
+        rows.append(u)
+    rows.sort(key=lambda u: u.get("joinedAt", 0), reverse=True)
+    keep = ("id", "displayName", "email", "accountType", "status", "isAdmin", "city", "joinedAt", "lastSeenAt")
+    return {"total": len(rows), "items": [{k: u.get(k) for k in keep} for u in rows[offset:offset + limit]]}
+
+
+def a_adminBroadcast(store, uid, args):
+    _need_admin(store, uid)
+    title, body = _s(args.get("title")), _s(args.get("body"))
+    audience = _s(args.get("audience")) or "ALL"
+    if not title or not body:
+        raise ApiError("عنوان و متن اعلان را وارد کنید.")
+    if len(title) > 100 or len(body) > 500:
+        raise ApiError("عنوان حداکثر ۱۰۰ و متن حداکثر ۵۰۰ نویسه باشد.")
+    if audience != "ALL" and audience not in ROLES:
+        raise ApiError("مخاطب نامعتبر است.")
+    if not RL.allow("broadcast:" + uid, 5, 3600):
+        raise ApiError(TOO_MANY)
+    tokens = {}
+    for t in store.all("pushTokens"):
+        tokens.setdefault(t.get("userId"), []).append(t["id"])
+    sent, pairs = 0, []
+    for u in list(store.all("users"))[:5000]:
+        if u.get("status") in ("BLOCKED", "DELETED") or (audience != "ALL" and u.get("accountType") != audience):
+            continue
+        if (u.get("notificationSettings") or {}).get("safetyNotice", True) is False:
+            continue
+        nid = new_id("n")
+        store.put("notifications", {"id": nid, "userId": u["id"], "type": "SAFETY_NOTICE", "title": title,
+                                    "body": body, "relatedId": None, "read": False, "createdAt": now_ms()})
+        pairs += [(tk, nid) for tk in tokens.get(u["id"], [])]
+        sent += 1
+    _fcm_fanout(pairs, title, body, "SAFETY_NOTICE", "")
+    _log_admin(store, uid, "BROADCAST", "USER", audience, title)
+    return {"sent": sent}
+
+
+# ---- Sharing a child's file with another person (teacher, therapist, spouse) ----------------
+
+SHARE_KINDS = [k for k, s in REC_KINDS.items() if s.get("child")]
+SHARE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+MAX_SHARES = 20
+
+
+def _norm_code(c):
+    return re.sub(r"[^A-Z0-9]", "", str(c or "").upper())
+
+
+def _share_hash(code):
+    return hmac.new(JWT_SECRET, b"share|" + code.encode("ascii", "ignore"), hashlib.sha256).hexdigest()
+
+
+def _share_live(sh):
+    return bool(sh) and not sh.get("revoked") and sh.get("expiresAt", 0) > now_ms()
+
+
+def _child_name(store, cid):
+    c = next((c for c in store.all("children") if c.get("id") == cid), None)
+    return (c or {}).get("nickname") or "کودک"
+
+
+def a_shareCreate(store, uid, args):
+    _require(uid)
+    cid = _s(args.get("childId"))
+    if not any(c.get("id") == cid and c.get("familyUserId") == uid for c in store.all("children")):
+        raise ApiError("پروفایل کودک پیدا نشد.")
+    kinds = args.get("kinds")
+    if not isinstance(kinds, list) or not kinds or any(k not in SHARE_KINDS for k in kinds):
+        raise ApiError("بخش‌های قابل اشتراک نامعتبر است.")
+    try:
+        days = int(args.get("days") or 7)
+    except (TypeError, ValueError):
+        raise ApiError("مدت اعتبار نامعتبر است.")
+    if not 1 <= days <= 90:
+        raise ApiError("مدت اعتبار باید بین ۱ تا ۹۰ روز باشد.")
+    mine = [s for s in store.all("shares") if s.get("ownerId") == uid]
+    if sum(1 for s in mine if _share_live(s)) >= MAX_SHARES:
+        raise ApiError("به سقف تعداد اشتراک‌های فعال رسیده‌اید.")
+    code = "".join(secrets.choice(SHARE_ALPHABET) for _ in range(8))
+    sh = {"id": new_id("sh"), "ownerId": uid, "childId": cid, "kinds": sorted(set(kinds)),
+          "label": _s(args.get("label"))[:60], "codeHash": _share_hash(code),
+          "expiresAt": now_ms() + days * 86400000, "createdAt": now_ms(),
+          "redeemedBy": "", "redeemedByName": "", "redeemedAt": 0, "revoked": False}
+    store.put("shares", sh)
+    return {"id": sh["id"], "code": "%s-%s" % (code[:4], code[4:]), "expiresAt": sh["expiresAt"]}
+
+
+def a_shareList(store, uid, args):
+    _require(uid)
+    owned, received = [], []
+    for s in sorted(store.all("shares"), key=lambda s: s.get("createdAt", 0), reverse=True):
+        if s.get("ownerId") == uid:
+            st = "REVOKED" if s.get("revoked") else "EXPIRED" if s.get("expiresAt", 0) <= now_ms() \
+                else "REDEEMED" if s.get("redeemedBy") else "WAITING"
+            owned.append({"id": s["id"], "childId": s["childId"], "childName": _child_name(store, s["childId"]),
+                          "kinds": s["kinds"], "label": s.get("label", ""), "expiresAt": s["expiresAt"],
+                          "createdAt": s["createdAt"], "status": st,
+                          "redeemedByName": s.get("redeemedByName", "")})
+        elif s.get("redeemedBy") == uid and _share_live(s):
+            owner = store.get("users", s["ownerId"]) or {}
+            received.append({"id": s["id"], "childName": _child_name(store, s["childId"]),
+                             "ownerName": owner.get("displayName", ""), "kinds": s["kinds"],
+                             "label": s.get("label", ""), "expiresAt": s["expiresAt"]})
+    return {"owned": owned, "received": received}
+
+
+def a_shareRevoke(store, uid, args):
+    _require(uid)
+    sh = store.get("shares", _s(args.get("id")))
+    if not sh or uid not in (sh.get("ownerId"), sh.get("redeemedBy")):
+        raise ApiError("اشتراک پیدا نشد.")
+    store.delete("shares", sh["id"])  # the code and any access derived from it die immediately
+
+
+def a_shareRedeem(store, uid, args):
+    _require(uid)
+    code = _norm_code(args.get("code"))
+    if RL.blocked("share-redeem:" + uid, 10, 900):
+        raise ApiError(TOO_MANY)
+    h = _share_hash(code)
+    sh = next((s for s in store.all("shares") if len(code) == 8 and hmac.compare_digest(s.get("codeHash", ""), h)), None)
+    if not sh or not _share_live(sh) or sh.get("ownerId") == uid or \
+            (sh.get("redeemedBy") and sh["redeemedBy"] != uid):
+        RL.hit("share-redeem:" + uid, 900)
+        raise ApiError("کد نامعتبر است یا منقضی شده.")
+    me = store.get("users", uid) or {}
+    sh.update(redeemedBy=uid, redeemedByName=me.get("displayName", ""), redeemedAt=sh.get("redeemedAt") or now_ms())
+    store.put("shares", sh)
+    owner = store.get("users", sh["ownerId"]) or {}
+    return {"id": sh["id"], "childName": _child_name(store, sh["childId"]),
+            "ownerName": owner.get("displayName", ""), "kinds": sh["kinds"], "expiresAt": sh["expiresAt"]}
+
+
+def _iso_day(d):
+    v = str(d.get("date") or "")
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", v):
+        return v
+    return time.strftime("%Y-%m-%d", time.gmtime(d.get("createdAt", 0) / 1000))
+
+
+def _child_records(store, owner, cid, kinds, dfrom="", dto=""):
+    out = {}
+    for k in kinds:
+        items = [d for d in store.all("r_" + k) if d.get("ownerId") == owner and d.get("childId") == cid
+                 and d.get("status") != "REMOVED"]
+        if dfrom:
+            items = [d for d in items if _iso_day(d) >= dfrom]
+        if dto:
+            items = [d for d in items if _iso_day(d) <= dto]
+        items.sort(key=lambda d: (_iso_day(d), d.get("createdAt", 0)), reverse=True)
+        out[k] = items[:500]
+    return out
+
+
+def _access_share(store, uid, sid):
+    sh = store.get("shares", sid)
+    if not sh or not _share_live(sh) or uid not in (sh.get("ownerId"), sh.get("redeemedBy")):
+        raise ApiError("اشتراک پیدا نشد یا منقضی شده است.")
+    return sh
+
+
+def a_shareView(store, uid, args):
+    _require(uid)
+    sh = _access_share(store, uid, _s(args.get("id")))
+    child = next((c for c in store.all("children") if c.get("id") == sh["childId"]), None)
+    if not child:
+        raise ApiError("پروفایل کودک پیدا نشد.")
+    owner = store.get("users", sh["ownerId"]) or {}
+    recs = _child_records(store, sh["ownerId"], sh["childId"], sh["kinds"])
+    return {"child": {"id": child["id"], "nickname": child.get("nickname"), "ageRange": child.get("ageRange")},
+            "ownerName": owner.get("displayName", ""), "kinds": sh["kinds"], "expiresAt": sh["expiresAt"],
+            "records": {k: [_rec_view(store, d, uid, k) for d in v] for k, v in recs.items()}}
+
+
+# ---- Printable report -----------------------------------------------------------------------
+
+LOG_TYPES = {"meltdown": "بحران رفتاری", "sleep": "خواب", "seizure": "تشنج", "meal": "تغذیه",
+             "trigger": "محرک", "other": "سایر"}
+
+
+def build_report_html(store, uid, q):
+    import html as _html
+    esc = lambda v: _html.escape(str(v if v is not None else ""), quote=True)
+    sid = _s(q.get("share"))
+    if sid:
+        sh = _access_share(store, uid, sid)
+        owner, cid, kinds = sh["ownerId"], sh["childId"], sh["kinds"]
+    else:
+        cid, owner, kinds = _s(q.get("childId")), uid, SHARE_KINDS
+    child = next((c for c in store.all("children") if c.get("id") == cid and c.get("familyUserId") == owner), None)
+    if not child:
+        raise ApiError("پروفایل کودک پیدا نشد.")
+    dfrom, dto = _s(q.get("from")), _s(q.get("to"))
+    iso = re.compile(r"\d{4}-\d{2}-\d{2}")
+    dfrom = dfrom if iso.fullmatch(dfrom) else ""
+    dto = dto if iso.fullmatch(dto) else ""
+    recs = _child_records(store, owner, cid, kinds, dfrom, dto)
+    parts = []
+
+    def table(head, rows):
+        if not rows:
+            return "<p class=muted>موردی ثبت نشده است.</p>"
+        return "<table><tr>%s</tr>%s</table>" % (
+            "".join("<th>%s</th>" % esc(h) for h in head),
+            "".join("<tr>%s</tr>" % "".join("<td>%s</td>" % esc(c) for c in r) for r in rows))
+
+    if "emergency" in kinds and recs.get("emergency"):
+        e = recs["emergency"][0]
+        rows = [(lbl, e.get(f)) for lbl, f in (("نام", "name"), ("تشخیص", "diagnosis"), ("حساسیت‌های حسی", "sensory"),
+                                                ("محرک‌ها", "triggers"), ("روش‌های آرام‌سازی", "calming"),
+                                                ("نکات پزشکی", "medical"), ("تماس ۱", "contact1Name"),
+                                                ("تلفن ۱", "contact1Phone"), ("تماس ۲", "contact2Name"),
+                                                ("تلفن ۲", "contact2Phone")) if e.get(f)]
+        parts.append("<h2>کارت اضطراری</h2>" + table(("مورد", "مقدار"), rows))
+    if "log" in kinds:
+        logs = recs.get("log", [])
+        counts = {}
+        for d in logs:
+            counts[d.get("type")] = counts.get(d.get("type"), 0) + 1
+        ints = [int(d["intensity"]) for d in logs if str(d.get("intensity") or "").isdigit()]
+        summ = "، ".join("%s: %d" % (LOG_TYPES.get(k, k), n) for k, n in counts.items())
+        parts.append("<h2>ثبت رویدادها</h2><p class=muted>%s%s</p>" % (
+            esc("جمع: %d" % len(logs) + ("  —  " + summ if summ else "")),
+            esc("  —  میانگین شدت: %.1f" % (sum(ints) / len(ints)) if ints else "")))
+        parts.append(table(("تاریخ", "ساعت", "نوع", "شدت", "مدت (دقیقه)", "محرک", "یادداشت"),
+                           [(_iso_day(d), d.get("time"), LOG_TYPES.get(d.get("type"), d.get("type")), d.get("intensity"),
+                             d.get("durationMin"), d.get("trigger"), d.get("notes")) for d in logs]))
+    if "diary" in kinds:
+        parts.append("<h2>دفتر خاطرات</h2>" + table(("تاریخ", "حال", "یادداشت"),
+                     [(_iso_day(d), d.get("mood"), d.get("note")) for d in recs.get("diary", [])]))
+    if "med" in kinds:
+        parts.append("<h2>دارو و مکمل</h2>" + table(("نام", "دوز", "زمان‌ها", "توضیح"),
+                     [(d.get("name"), d.get("dose"), d.get("times"), d.get("notes")) for d in recs.get("med", [])]))
+    if "reward" in kinds:
+        parts.append("<h2>پاداش‌ها</h2>" + table(("عنوان", "ستاره", "هدف"),
+                     [(d.get("title"), d.get("stars"), d.get("goal")) for d in recs.get("reward", [])]))
+    owner_doc = store.get("users", owner) or {}
+    period = ("از %s " % dfrom if dfrom else "") + ("تا %s" % dto if dto else "") or "همهٔ زمان‌ها"
+    return (
+        "<!doctype html><html lang=fa dir=rtl><head><meta charset=utf-8>"
+        "<meta name=viewport content='width=device-width,initial-scale=1'>"
+        "<title>گزارش %s</title><style>"
+        "body{font-family:Vazirmatn,Tahoma,sans-serif;margin:24px;color:#222;line-height:1.9}"
+        "h1{font-size:22px;margin:0}h2{font-size:17px;border-bottom:2px solid #6a5acd;padding-bottom:4px;margin-top:28px}"
+        "table{border-collapse:collapse;width:100%%;font-size:13px}th,td{border:1px solid #ccc;padding:5px 8px;text-align:right;vertical-align:top}"
+        "th{background:#f0eefc}.muted{color:#666;font-size:13px}.foot{margin-top:32px;color:#888;font-size:12px}"
+        "@media print{body{margin:8mm}h2{break-after:avoid}tr{break-inside:avoid}}</style></head><body>"
+        "<h1>گزارش «%s»</h1><p class=muted>بازهٔ گزارش: %s — تنظیم‌شده توسط %s — تاریخ تهیه: %s</p>%s"
+        "<p class=foot>این گزارش از ثبت‌های خانواده در «همراهِ طیف» ساخته شده و جایگزین نظر پزشک یا متخصص نیست.</p>"
+        "</body></html>"
+    ) % (esc(child.get("nickname") or "کودک"), esc(child.get("nickname") or "کودک"), esc(period),
+         esc(owner_doc.get("displayName", "")), time.strftime("%Y-%m-%d"), "".join(parts))
+
+
+# ---- State etag (cheap polling) --------------------------------------------------------------
+
+def state_etag(state):
+    return hashlib.sha1(json.dumps(state, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:20]
+
+
+def a_state(store, uid, args):
+    """Poll-friendly snapshot: {etag, notModified:true} when args.etag still matches, else {etag, state}."""
+    _require(uid)
+    state = build_state(store, uid)
+    tag = state_etag(state)
+    if _s(args.get("etag")) == tag:
+        return {"etag": tag, "notModified": True}
+    return {"etag": tag, "state": state}
+
+
+# ---- Orphan upload sweeper ----------------------------------------------------------------------
+
+def sweep_orphans(min_age_hours=24, owner=None, dry=False):
+    """Remove uploaded files that no document references. -> number removed."""
+    cur = conn().cursor()
+    cur.execute("SELECT data::text FROM docs WHERE collection<>'files'")
+    referenced = set()
+    for (txt,) in cur.fetchall():
+        referenced.update(re.findall(r"[0-9a-f]{32}", txt))
+    cur.close()
+    cutoff = now_ms() - int(min_age_hours * 3600 * 1000)
+    removed = 0
+    with MUT_LOCK:
+        store = Store()
+        known = set()
+        for f in list(store.all("files")):
+            known.add(f["id"])
+            if f["id"] in referenced or f.get("createdAt", 0) > cutoff or (owner and f.get("ownerId") != owner):
+                continue
+            removed += 1
+            if not dry:
+                _unlink_file(f)
+                store.delete("files", f["id"])
+        if not owner and os.path.isdir(UPLOAD_DIR):  # bytes with no doc at all
+            for fn in os.listdir(UPLOAD_DIR):
+                fid = fn.split(".")[0]
+                p = os.path.join(UPLOAD_DIR, fn)
+                if HEX32.fullmatch(fid) and fid not in known and fid not in referenced \
+                        and os.path.getmtime(p) < cutoff / 1000:
+                    removed += 1
+                    if not dry:
+                        os.remove(p)
+    return removed
+
+
+def _sweeper_loop():
+    time.sleep(30)
+    while True:
+        try:
+            n = sweep_orphans()
+            log("sweeper: removed %d orphan upload(s)" % n)
+        except Exception:
+            log("sweeper failed:", traceback.format_exc(limit=3))
+        time.sleep(24 * 3600)
+
+
+LIGHT_PREFIXES = ("a_donation", "a_rec", "a_slot", "a_search", "a_share", "a_admin", "a_state")
 LIGHT_ACTIONS = {n[2:] for n in list(globals()) if n.startswith(LIGHT_PREFIXES)}
 
 
@@ -1576,9 +2504,14 @@ def build_state(store, uid):
             return u
         # Strip fields that are private to the owner (and admins, via the admin panel).
         pu = dict(u)
-        pu.pop("email", None)
-        pu.pop("blockedUserIds", None)
-        pu.pop("notificationSettings", None)
+        for k in ("email", "blockedUserIds", "notificationSettings", "tokensValidAfter", "lastSeenAt"):
+            pu.pop(k, None)
+        if not admin:  # honour the owner's privacy switches (city hidden by default, bio shown by default)
+            priv = u.get("privacy") or {}
+            if not priv.get("showCity", False):
+                pu["city"] = None
+            if not priv.get("showBio", True):
+                pu["bio"] = None
         return pu
 
     users = [public_user(u) for u in store.all("users")]
@@ -1588,7 +2521,8 @@ def build_state(store, uid):
     def visible_content(doc, author_field="authorId"):
         return (doc.get("status") == "PUBLISHED" or doc.get(author_field) == uid or admin)
 
-    questions = [q for q in store.all("questions")
+    questions = [dict(q, authorId="") if q.get("isAnonymous") and q.get("authorId") != uid and not admin else q
+                 for q in store.all("questions")
                  if q.get("status") != "REMOVED" and visible_content(q)]
     q_ids = {q["id"] for q in questions}
     answers = [a for a in store.all("answers")
@@ -1647,44 +2581,58 @@ def build_state(store, uid):
 # Auth endpoints
 # --------------------------------------------------------------------------------------
 
-def do_register(args):
+def do_register(args, ip):
+    if not RL.allow("register-ip:" + ip, 10, 3600):
+        raise ApiError(TOO_MANY)
     name = _s(args.get("displayName"))
     mail = _s(args.get("email")).lower()
-    password = args.get("password") or ""
-    if not name:
-        raise ApiError("نام نمایشی را وارد کنید.")
-    if "@" not in mail or len(mail) < 5:
+    password = args.get("password")
+    if not name or len(name) > 60:
+        raise ApiError("نام نمایشی را وارد کنید (حداکثر ۶۰ نویسه).")
+    if not EMAIL_RE.match(mail) or len(mail) > 120:
         raise ApiError("ایمیل معتبر وارد کنید.")
-    if len(password) < 6:
+    if not isinstance(password, str) or len(password) < 6:
         raise ApiError("رمز عبور باید حداقل ۶ نویسه باشد.")
+    if len(password) > MAX_PASSWORD:
+        raise ApiError("رمز عبور بیش از حد طولانی است.")
     if not args.get("acceptedTerms"):
         raise ApiError("برای ادامه، قوانین و حریم خصوصی را بپذیرید.")
-    if has_email(mail):
-        raise ApiError("این ایمیل قبلاً ثبت شده است.")
-    store = Store()
-    uid = new_id("u")
-    user = {
-        "id": uid, "displayName": name, "accountType": args.get("accountType") or "FAMILY",
-        "email": mail, "photoUrl": None, "city": None, "bio": None, "status": "ACTIVE",
-        "isAdmin": False, "privacy": {"showCity": False, "showBio": True, "allowMessageRequests": True},
-        "notificationSettings": {}, "blockedUserIds": [], "joinedAt": now_ms(), "updatedAt": now_ms(),
-    }
-    store.put("users", user)
-    set_cred(mail, password, uid)
+    with MUT_LOCK:
+        if has_email(mail):
+            raise ApiError("این ایمیل قبلاً ثبت شده است.")
+        store = Store()
+        uid = new_id("u")
+        # Everyone starts as FAMILY: a professional account type is granted only by admin verification.
+        user = {
+            "id": uid, "displayName": name, "accountType": "FAMILY",
+            "email": mail, "photoUrl": None, "city": None, "bio": None, "status": "ACTIVE",
+            "isAdmin": False, "privacy": {"showCity": False, "showBio": True, "allowMessageRequests": True},
+            "notificationSettings": {}, "blockedUserIds": [], "joinedAt": now_ms(), "updatedAt": now_ms(),
+        }
+        store.put("users", user)
+        set_cred(mail, password, uid)
     return {"token": make_token(uid), "user": user}
 
 
-def do_login(args):
+def do_login(args, ip):
     mail = _s(args.get("email")).lower()
-    uid = check_cred(mail, args.get("password") or "")
+    password = args.get("password")
+    fkey, ikey = "login-fail:" + mail, "login-ip:" + ip
+    if RL.blocked(fkey, 8, 900) or RL.blocked(ikey, 40, 900):
+        raise ApiError(TOO_MANY)
+    uid = check_cred(mail, password[:MAX_PASSWORD] if isinstance(password, str) else "") \
+        if len(mail) <= 120 and isinstance(password, str) and len(password) <= MAX_PASSWORD else None
     if not uid:
+        RL.hit(fkey, 900)
+        RL.hit(ikey, 900)
         raise ApiError("ایمیل یا رمز عبور نادرست است.")
     store = Store()
     user = store.get("users", uid)
     if not user:
         raise ApiError("حساب یافت نشد.")
-    if user.get("status") == "BLOCKED":
+    if user.get("status") in ("BLOCKED", "DELETED"):
         raise ApiError("این حساب مسدود شده است.")
+    RL.clear(fkey)
     return {"token": make_token(uid), "user": user}
 
 
@@ -1707,55 +2655,124 @@ UPLOAD_TYPES = {
 MIME_BY_EXT = {v: k for k, v in UPLOAD_TYPES.items()}
 
 
+MAX_FILES_PER_USER = 300
+MAX_BYTES_PER_USER = 200 * 1024 * 1024
+
+
+def _sniff_ok(mime, d):
+    """Magic-byte check so a declared mime can't be used to smuggle other content."""
+    h = d[:16]
+    if mime == "image/jpeg":
+        return h[:3] == b"\xff\xd8\xff"
+    if mime == "image/png":
+        return h[:8] == b"\x89PNG\r\n\x1a\n"
+    if mime == "image/gif":
+        return h[:4] == b"GIF8"
+    if mime == "image/webp":
+        return h[:4] == b"RIFF" and h[8:12] == b"WEBP"
+    if mime == "application/pdf":
+        return d[:1024].find(b"%PDF-") >= 0
+    if mime in ("audio/mp4", "video/mp4"):
+        return h[4:8] == b"ftyp"
+    if mime == "audio/mpeg":
+        return h[:3] == b"ID3" or (h[0:1] == b"\xff" and (h[1] & 0xE0) == 0xE0)
+    if mime == "audio/ogg":
+        return h[:4] == b"OggS"
+    if mime == "audio/aac":
+        return h[0:1] == b"\xff" and (h[1] & 0xF0) == 0xF0
+    return False
+
+
 def save_upload(store, uid, mime, data, name):
     ext = UPLOAD_TYPES.get(mime)
     if not ext:
         raise ApiError("نوع فایل پشتیبانی نمی‌شود.")
     if not data or len(data) > MAX_UPLOAD:
         raise ApiError("حجم فایل باید کمتر از ۸ مگابایت باشد.")
-    fid = secrets.token_hex(16)
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
-    with open(os.path.join(UPLOAD_DIR, "%s.%s" % (fid, ext)), "wb") as f:
-        f.write(data)
-    store.put("files", {"id": fid, "ownerId": uid, "mime": mime, "size": len(data),
-                        "name": _s(name)[:120], "createdAt": now_ms()})
+    if not _sniff_ok(mime, data):
+        raise ApiError("محتوای فایل با نوع اعلام‌شده هم‌خوانی ندارد.")
+    with MUT_LOCK:  # quota check + insert must not interleave
+        mine = [f for f in store.all("files") if f.get("ownerId") == uid]
+        if len(mine) >= MAX_FILES_PER_USER or sum(int(f.get("size", 0) or 0) for f in mine) + len(data) > MAX_BYTES_PER_USER:
+            raise ApiError("سقف فضای فایل‌های شما پر شده است؛ چند فایل قدیمی را حذف کنید.")
+        fid = secrets.token_hex(16)
+        os.makedirs(UPLOAD_DIR, exist_ok=True)
+        path = os.path.join(UPLOAD_DIR, "%s.%s" % (fid, ext))
+        with open(path + ".part", "wb") as f:
+            f.write(data)
+        os.replace(path + ".part", path)
+        store.put("files", {"id": fid, "ownerId": uid, "mime": mime, "size": len(data),
+                            "name": _s(name)[:120], "createdAt": now_ms()})
     return {"id": fid, "url": "files/%s" % fid, "mime": mime, "size": len(data)}
 
 
 TTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tts")
 TTS_MAX = 300
+TTS_CACHE_FILES = 3000
+TTS_CACHE_BYTES = 300 * 1024 * 1024
 _tts_lock = threading.Lock()
 
 
-def tts_audio(text):
-    """Persian speech -> (bytes, mime). Microsoft neural voice (edge-tts, fa-IR-Dilara) first,
-    Piper (fa_IR-amir, local) as the fallback. Results are cached on disk by text hash."""
-    import hashlib, subprocess
-    cache = os.path.join(TTS_DIR, "cache")
-    os.makedirs(cache, exist_ok=True)
-    h = hashlib.sha1(text.encode("utf-8")).hexdigest()
-    py = os.path.join(TTS_DIR, "venv/bin/python")
+def _tts_cached(cache, h):
     for ext, mime in (("mp3", "audio/mpeg"), ("wav", "audio/wav")):
         p = os.path.join(cache, h + "." + ext)
         if os.path.exists(p):
-            with open(p, "rb") as f:
-                return f.read(), mime
+            try:
+                os.utime(p)  # LRU: a hit makes the entry the freshest
+                with open(p, "rb") as f:
+                    return f.read(), mime
+            except OSError:
+                pass
+    return None
+
+
+def tts_audio(text, uid=None):
+    """Persian speech -> (bytes, mime). Microsoft neural voice (edge-tts, fa-IR-Dilara) first,
+    Piper (fa_IR-amir, local) as the fallback. Results are cached on disk by text hash (LRU)."""
+    import subprocess
+    cache = os.path.join(TTS_DIR, "cache")
+    os.makedirs(cache, exist_ok=True)
+    h = hashlib.sha1(text.encode("utf-8")).hexdigest()
+    hit = _tts_cached(cache, h)
+    if hit:
+        return hit
+    if uid and not RL.allow("tts:" + uid, 120, 3600):  # only uncached synthesis is metered
+        raise ApiError(TOO_MANY)
+    py = os.path.join(TTS_DIR, "venv/bin/python")
     with _tts_lock:
-        files = sorted((os.path.join(cache, f) for f in os.listdir(cache)), key=os.path.getmtime)
-        for old in files[:-3000]:
-            os.remove(old)
+        hit = _tts_cached(cache, h)
+        if hit:
+            return hit
+        entries = []
+        for fn in os.listdir(cache):
+            p = os.path.join(cache, fn)
+            try:
+                st = os.stat(p)
+                entries.append((st.st_mtime, st.st_size, p))
+            except OSError:
+                pass
+        entries.sort()
+        total = sum(e[1] for e in entries)
+        while entries and (len(entries) > TTS_CACHE_FILES or total > TTS_CACHE_BYTES):
+            _, size, p = entries.pop(0)
+            total -= size
+            try:
+                os.remove(p)
+            except OSError:
+                pass
         attempts = (
-            ("mp3", "audio/mpeg", [py, "-m", "edge_tts", "--voice", "fa-IR-DilaraNeural", "--file", "-", "--write-media"], None),
-            ("wav", "audio/wav", [py, "-m", "piper", "-m", os.path.join(TTS_DIR, "fa_IR-amir-medium.onnx"), "-f"], None),
+            ("mp3", "audio/mpeg", [py, "-m", "edge_tts", "--voice", "fa-IR-DilaraNeural", "--file", "-", "--write-media"]),
+            ("wav", "audio/wav", [py, "-m", "piper", "-m", os.path.join(TTS_DIR, "fa_IR-amir-medium.onnx"), "-f"]),
         )
         err = ""
-        for ext, mime, cmd, _ in attempts:
+        for ext, mime, cmd in attempts:
             path = os.path.join(cache, h + "." + ext)
             tmp = path + ".part." + ext
             try:
                 r = subprocess.run(cmd + [tmp], input=text.encode("utf-8"), capture_output=True, timeout=45)
             except subprocess.TimeoutExpired:
-                err = "timeout"; continue
+                err = "timeout"
+                continue
             if r.returncode == 0 and os.path.exists(tmp) and os.path.getsize(tmp) > 500:
                 os.replace(tmp, path)
                 with open(path, "rb") as f:
@@ -1766,111 +2783,198 @@ def tts_audio(text):
         raise RuntimeError(err or "tts failed")
 
 
+def clean_tts_text(text):
+    text = re.sub(r"[\x00-\x1f\x7f]+", " ", text if isinstance(text, str) else "").strip()
+    if not text or len(text) > TTS_MAX:
+        raise ApiError("متن نامعتبر است.")
+    return text
+
+
+GENERIC_ERROR = "خطای داخلی سرور. کمی بعد دوباره تلاش کنید."
+MAX_BODY = 1024 * 1024
+READ_ONLY_ACTIONS = {"recList", "donationList", "donationGet", "search", "shareList", "shareView",
+                     "adminStats", "adminListUsers", "state", "exportMyData"}
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    timeout = 60  # drop stalled/slow-loris connections
 
-    def log_message(self, *a):
-        pass
+    def handle(self):
+        try:
+            super().handle()
+        finally:
+            c = getattr(_local, "conn", None)
+            if c is not None:
+                try:
+                    c.close()
+                except Exception:
+                    pass
+                _local.conn = None
 
-    def _send(self, code, obj):
+    def log_message(self, fmt, *a):
+        log("http: " + (fmt % a))
+
+    def log_request(self, code="-", size="-"):
+        # One line per request in journald. Never the query string (it can carry text or ids).
+        path = self.path.split("?")[0]
+        if path.startswith("/api/files/"):
+            path = "/api/files/" + path.rsplit("/", 1)[-1][:6] + "..."
+        ms = int((time.time() - getattr(self, "_t0", time.time())) * 1000)
+        log("%s %s %s %s uid=%s %dms" % (self.client_address[0], self.command, path, code,
+                                          getattr(self, "_log_uid", "-"), ms))
+
+    def _ip(self):
+        peer = self.client_address[0]
+        if peer in ("127.0.0.1", "::1"):  # behind our own nginx / CDN: trust its forwarding headers
+            fwd = (self.headers.get("X-Forwarded-For") or self.headers.get("X-Real-IP") or "").split(",")[0].strip()
+            if re.fullmatch(r"[0-9a-fA-F:.]{3,45}", fwd):
+                return fwd
+        return peer
+
+    def _send(self, code, obj, extra=None):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        for k, v in (extra or {}).items():
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
 
+    def _fail(self, where):
+        log("error in %s:\n%s" % (where, traceback.format_exc()))
+        try:
+            self._send(500, {"ok": False, "error": GENERIC_ERROR})
+        except Exception:
+            pass
+
     def _uid(self):
         auth = self.headers.get("Authorization", "")
-        if auth.startswith("Bearer "):
-            return verify_token(auth[7:])
-        return None
+        if not auth.startswith("Bearer "):
+            return None
+        uid = token_user(auth[7:])
+        if uid:
+            self._log_uid = uid
+            touch_user(uid)
+        return uid
 
     def _body(self):
         n = int(self.headers.get("Content-Length", "0") or "0")
         if n <= 0:
             return {}
+        if n > MAX_BODY:
+            raise ApiError("درخواست بیش از حد بزرگ است.")
         raw = self.rfile.read(n)
         try:
-            return json.loads(raw.decode("utf-8"))
+            obj = json.loads(raw.decode("utf-8"))
         except Exception:
             return {}
+        return obj if isinstance(obj, dict) else {}
+
+    def _send_bytes(self, mime, body, cache="private, max-age=31536000, immutable", extra=None):
+        self.send_response(200)
+        self.send_header("Content-Type", mime)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", cache)
+        self.send_header("X-Content-Type-Options", "nosniff")
+        for k, v in (extra or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_GET(self):
-        if self.path.startswith("/api/files/"):
-            fid = self.path.split("?")[0].rsplit("/", 1)[-1]
-            if not (len(fid) == 32 and all(c in "0123456789abcdef" for c in fid)):
+        self._t0 = time.time()
+        try:
+            self._get()
+        except ApiError as e:
+            self._send(400, {"ok": False, "error": str(e)})
+        except Exception:
+            self._fail("GET " + self.path.split("?")[0])
+
+    def do_POST(self):
+        self._t0 = time.time()
+        try:
+            self._post()
+        except ApiError as e:
+            self._send(200, {"ok": False, "error": str(e)})
+        except Exception:
+            self._fail("POST " + self.path.split("?")[0])
+
+    def _get(self):
+        path = self.path.split("?")[0].rstrip("/")
+        query = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).items()}
+        if path.startswith("/api/files/"):
+            fid = path.rsplit("/", 1)[-1]
+            if not HEX32.fullmatch(fid):
                 return self._send(404, {"ok": False, "error": "یافت نشد."})
             doc = Store().get("files", fid)
             ext = UPLOAD_TYPES.get(doc["mime"]) if doc else None
-            path = os.path.join(UPLOAD_DIR, "%s.%s" % (fid, ext)) if ext else None
-            if not path or not os.path.exists(path):
+            fpath = os.path.join(UPLOAD_DIR, "%s.%s" % (fid, ext)) if ext else None
+            if not fpath or not os.path.exists(fpath):
                 return self._send(404, {"ok": False, "error": "یافت نشد."})
-            with open(path, "rb") as f:
+            with open(fpath, "rb") as f:
                 body = f.read()
-            self.send_response(200)
-            self.send_header("Content-Type", doc["mime"])
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "private, max-age=31536000, immutable")
-            self.send_header("X-Content-Type-Options", "nosniff")
-            self.end_headers()
-            self.wfile.write(body)
-            return
-        if self.path.startswith("/api/tts"):
-            if not self._uid():
+            return self._send_bytes(doc["mime"], body, extra={"Content-Security-Policy": "default-src 'none'; sandbox"})
+        if path == "/api/tts":  # GET kept for 0.12 clients; POST is preferred (text stays out of URLs/logs)
+            uid = self._uid()
+            if not uid:
                 return self._send(401, {"ok": False, "error": NOT_SIGNED_IN})
-            from urllib.parse import urlparse, parse_qs
-            text = (parse_qs(urlparse(self.path).query).get("text") or [""])[0].strip()
-            if not text or len(text) > TTS_MAX:
-                return self._send(400, {"ok": False, "error": "متن نامعتبر است."})
-            try:
-                body, mime = tts_audio(text)
-            except Exception as e:
-                return self._send(503, {"ok": False, "error": "تبدیل متن به صدا ممکن نشد: %s" % e})
-            self.send_response(200)
-            self.send_header("Content-Type", mime)
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "private, max-age=31536000, immutable")
-            self.end_headers()
-            self.wfile.write(body)
-            return
-        if self.path.rstrip("/") == "/api/health":
+            return self._serve_tts(uid, query.get("text", ""))
+        if path == "/api/health":
             return self._send(200, {"ok": True})
-        if self.path.rstrip("/") == "/api/features":
-            try:
-                store = Store()
-                uid = self._uid()
-                off = blocked_modules(store, uid) if uid else set(disabled_features(store))
-                return self._send(200, {"ok": True, "disabled": sorted(off)})
-            except Exception as e:
-                return self._send(500, {"ok": False, "error": "خطای سرور: %s" % e})
-        if self.path.rstrip("/") == "/api/notifications":
+        if path == "/api/features":
+            store = Store()
+            uid = self._uid()
+            off = blocked_modules(store, uid) if uid else set(disabled_features(store))
+            return self._send(200, {"ok": True, "disabled": sorted(off)})
+        if path == "/api/notifications":
             # Light endpoint for the background push poller (just the caller's notifications).
             uid = self._uid()
             if not uid:
                 return self._send(401, {"ok": False, "error": NOT_SIGNED_IN})
-            try:
-                store = Store()
-                items = sorted(
-                    (n for n in store.all("notifications") if n.get("userId") == uid),
-                    key=lambda n: n.get("createdAt", 0), reverse=True,
-                )[:50]
-                return self._send(200, {"ok": True, "notifications": items})
-            except Exception as e:
-                return self._send(500, {"ok": False, "error": "خطای سرور: %s" % e})
-        if self.path.rstrip("/") == "/api/state":
+            store = Store()
+            items = sorted(
+                (n for n in store.all("notifications") if n.get("userId") == uid),
+                key=lambda n: n.get("createdAt", 0), reverse=True,
+            )[:50]
+            return self._send(200, {"ok": True, "notifications": items})
+        if path == "/api/state":
             uid = self._uid()
             if not uid:
                 return self._send(401, {"ok": False, "error": NOT_SIGNED_IN})
-            try:
-                state = build_state(Store(), uid)
-                return self._send(200, {"ok": True, "state": state})
-            except Exception as e:
-                return self._send(500, {"ok": False, "error": "خطای سرور: %s" % e})
+            state = build_state(Store(), uid)
+            tag = state_etag(state)
+            if query.get("etag") == tag or (self.headers.get("If-None-Match") or "").strip('"') == tag:
+                return self._send(200, {"ok": True, "notModified": True, "etag": tag}, {"ETag": '"%s"' % tag})
+            return self._send(200, {"ok": True, "state": state, "etag": tag}, {"ETag": '"%s"' % tag})
+        if path == "/api/report":
+            uid = self._uid()
+            if not uid:
+                return self._send(401, {"ok": False, "error": NOT_SIGNED_IN})
+            if not RL.allow("report:" + uid, 30, 600):
+                raise ApiError(TOO_MANY)
+            page = build_report_html(Store(), uid, query).encode("utf-8")
+            return self._send_bytes("text/html; charset=utf-8", page, cache="no-store", extra={
+                "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src data:"})
         return self._send(404, {"ok": False, "error": "یافت نشد."})
 
-    def do_POST(self):
-        path = self.path.rstrip("/")
+    def _serve_tts(self, uid, text):
+        try:
+            text = clean_tts_text(text)
+        except ApiError as e:
+            return self._send(400, {"ok": False, "error": str(e)})
+        try:
+            body, mime = tts_audio(text, uid)
+        except ApiError as e:
+            return self._send(429, {"ok": False, "error": str(e)})
+        except Exception as e:
+            log("tts failed: %s" % e)
+            return self._send(503, {"ok": False, "error": "تبدیل متن به صدا ممکن نشد."})
+        return self._send_bytes(mime, body)
+
+    def _post(self):
+        path = self.path.split("?")[0].rstrip("/")
         if path == "/api/upload":
             uid = self._uid()
             n = int(self.headers.get("Content-Length", "0") or "0")
@@ -1878,6 +2982,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(401, {"ok": False, "error": NOT_SIGNED_IN})
             if n > MAX_UPLOAD:
                 return self._send(413, {"ok": False, "error": "حجم فایل باید کمتر از ۸ مگابایت باشد."})
+            if n <= 0:
+                return self._send(400, {"ok": False, "error": "فایل خالی است."})
+            if not RL.allow("upload:" + uid, 60, 600):
+                return self._send(429, {"ok": False, "error": TOO_MANY})
             try:
                 data = self.rfile.read(n)
                 mime = (self.headers.get("Content-Type", "") or "").split(";")[0].strip().lower()
@@ -1885,40 +2993,68 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, "file": save_upload(Store(), uid, mime, data, name)})
             except ApiError as e:
                 return self._send(400, {"ok": False, "error": str(e)})
-            except Exception as e:
-                return self._send(500, {"ok": False, "error": "خطای سرور: %s" % e})
+        if path == "/api/tts":
+            uid = self._uid()
+            if not uid:
+                return self._send(401, {"ok": False, "error": NOT_SIGNED_IN})
+            return self._serve_tts(uid, self._body().get("text", ""))
         args = self._body()
-        try:
-            if path == "/api/auth/register":
-                return self._send(200, do_register(args))
-            if path == "/api/auth/login":
-                return self._send(200, do_login(args))
-            if path == "/api/auth/reset":
-                return self._send(200, {"ok": True})  # never reveal whether the email exists
-            if path == "/api/action":
-                uid = self._uid()
-                if not uid:
-                    return self._send(401, {"ok": False, "error": NOT_SIGNED_IN})
-                name = args.get("name")
-                fn = ACTIONS.get(name)
-                if not fn:
-                    return self._send(404, {"ok": False, "error": "عملیات ناشناخته."})
+        ip = self._ip()
+        if path == "/api/auth/register":
+            return self._send(200, do_register(args, ip))
+        if path == "/api/auth/login":
+            return self._send(200, do_login(args, ip))
+        if path == "/api/auth/forgot":
+            return self._send(200, do_forgot(args, ip))
+        if path == "/api/auth/reset":
+            return self._send(200, do_reset(args, ip))
+        if path == "/api/action":
+            uid = self._uid()
+            if not uid:
+                return self._send(401, {"ok": False, "error": NOT_SIGNED_IN})
+            name = args.get("name")
+            fn = ACTIONS.get(name) if isinstance(name, str) else None
+            if not fn:
+                return self._send(404, {"ok": False, "error": "عملیات ناشناخته."})
+            a = args.get("args")
+            a = a if isinstance(a, dict) else {}
+            if not RL.allow("act:" + uid, 600, 60):
+                return self._send(429, {"ok": False, "error": TOO_MANY})
+            gate = module_of(name, a)
+            if gate and gate in blocked_modules(Store(), uid):
+                return self._send(200, {"ok": False, "error": "این بخش برای شما فعال نیست."})
+            if name in READ_ONLY_ACTIONS:
                 store = Store()
-                mod = module_of(name, args.get("args") or {})
-                if mod and mod in blocked_modules(store, uid):
-                    return self._send(200, {"ok": False, "error": "این بخش برای شما فعال نیست."})
-                data = fn(store, uid, args.get("args") or {})
-                resp = {"ok": True}
-                if data:
-                    resp["data"] = data
-                if name not in LIGHT_ACTIONS:
-                    resp["state"] = build_state(store, uid)  # fresh snapshot saves a round-trip
-                return self._send(200, resp)
-            return self._send(404, {"ok": False, "error": "یافت نشد."})
-        except ApiError as e:
-            return self._send(200, {"ok": False, "error": str(e)})
-        except Exception as e:
-            return self._send(500, {"ok": False, "error": "خطای سرور: %s" % e})
+                data = fn(store, uid, a)
+            else:
+                with MUT_LOCK:  # one writer at a time; a fresh Store inside the lock avoids stale reads
+                    store = Store()
+                    data = fn(store, uid, a)
+            resp = {"ok": True}
+            if data:
+                resp["data"] = data
+            if name not in LIGHT_ACTIONS:
+                resp["state"] = build_state(store, uid)  # fresh snapshot saves a round-trip
+            return self._send(200, resp)
+        return self._send(404, {"ok": False, "error": "یافت نشد."})
+
+
+_LAST_TOUCH = {}
+
+
+def touch_user(uid):
+    """Record lastSeenAt (at most hourly per user) with an atomic jsonb update."""
+    now = time.time()
+    if now - _LAST_TOUCH.get(uid, 0) < 3600:
+        return
+    _LAST_TOUCH[uid] = now
+    try:
+        cur = conn().cursor()
+        cur.execute("UPDATE docs SET data = jsonb_set(data, '{lastSeenAt}', to_jsonb(%s::bigint)) "
+                    "WHERE collection='users' AND id=%s", (int(now * 1000), uid))
+        cur.close()
+    except Exception:
+        log("touch_user failed:", traceback.format_exc(limit=2))
 
 
 # --------------------------------------------------------------------------------------
@@ -1939,6 +3075,7 @@ CREATE TABLE IF NOT EXISTS creds (
     pwhash text NOT NULL,
     uid text NOT NULL
 );
+ALTER TABLE creds ADD COLUMN IF NOT EXISTS iters integer;
 """
 
 def cmd_init_db():
@@ -1984,10 +3121,29 @@ def main():
             return print("disabled:", disabled_features(Store()))
         if cmd == "create-admin":
             return cmd_create_admin(sys.argv[2], sys.argv[3], sys.argv[4])
+        if cmd == "mailtest":  # mailtest TO
+            if len(sys.argv) < 3:
+                return print("usage: hamrah-api.py mailtest TO")
+            if not smtp_configured():
+                return print("SMTP not configured: set SMTP_HOST (and SMTP_PORT/USER/PASS/FROM) in .env")
+            try:
+                send_mail(sys.argv[2], "آزمایش ایمیل — همراهِ طیف",
+                          "\n".join(RLM + ln for ln in ("سلام،", "این یک ایمیل آزمایشی از سرور «همراهِ طیف» است.",
+                                                          "اگر آن را می‌بینید، ارسال کد بازیابی رمز کار می‌کند.")))
+            except Exception as e:
+                return print("mail FAILED: %s: %s" % (type(e).__name__, e))
+            return print("mail sent to %s via %s:%d" % (sys.argv[2], SMTP_HOST, SMTP_PORT))
+        if cmd == "sweep":  # sweep [HOURS]  -> delete unreferenced uploads older than HOURS (default 24)
+            hours = float(sys.argv[2]) if len(sys.argv) > 2 else 24
+            return print("removed %d orphan file(s)" % sweep_orphans(hours))
         print("unknown command: %s" % cmd)
         return
     cmd_init_db()
+    if not smtp_configured():
+        log("SMTP not configured: password-reset emails are disabled (adminIssueReset still works)")
+    threading.Thread(target=_sweeper_loop, daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    srv.daemon_threads = True
     print("hamrah-api listening on 127.0.0.1:%d" % PORT)
     srv.serve_forever()
 

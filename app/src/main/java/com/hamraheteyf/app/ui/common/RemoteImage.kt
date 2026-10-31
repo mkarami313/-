@@ -8,14 +8,17 @@ import android.net.Uri
 import android.util.LruCache
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.BrokenImage
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -23,9 +26,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.security.MessageDigest
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -41,27 +50,96 @@ private fun decodeSampled(bytes: ByteArray, maxSide: Int): Bitmap? {
     return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
 }
 
-private fun download(url: String): Bitmap? = runCatching {
+/** Size-capped (≈50 MB, least-recently-used first) on-disk cache of downloaded image bytes. */
+object ImageDiskCache {
+    private const val MAX_BYTES = 50L * 1024 * 1024
+    private var puts = 0
+
+    private fun dir(ctx: Context) = File(ctx.cacheDir, "img").apply { mkdirs() }
+    private fun file(ctx: Context, url: String) =
+        File(dir(ctx), MessageDigest.getInstance("SHA-1").digest(url.toByteArray()).joinToString("") { "%02x".format(it) } + ".img")
+
+    internal fun get(ctx: Context, url: String): ByteArray? = runCatching {
+        val f = file(ctx, url)
+        if (f.length() > 0) { f.setLastModified(System.currentTimeMillis()); f.readBytes() } else null
+    }.getOrNull()
+
+    internal fun put(ctx: Context, url: String, bytes: ByteArray) {
+        runCatching {
+            val f = file(ctx, url)
+            val tmp = File(f.parentFile, f.name + ".part")
+            tmp.writeBytes(bytes)
+            if (!tmp.renameTo(f)) tmp.delete()
+            if (++puts % 20 == 0) prune(ctx)
+        }
+    }
+
+    fun prune(ctx: Context) = runCatching {
+        val files = dir(ctx).listFiles().orEmpty().sortedBy { it.lastModified() }
+        var total = files.sumOf { it.length() }
+        for (f in files) { if (total <= MAX_BYTES) break; total -= f.length(); f.delete() }
+    }
+
+    fun clear(ctx: Context) { runCatching { dir(ctx).listFiles()?.forEach { it.delete() } }; ImageCache.evictAll() }
+}
+
+private class Fetched(val bytes: ByteArray?, val retryable: Boolean)
+
+private fun fetchBytes(url: String): Fetched = try {
     val c = URL(url).openConnection() as HttpURLConnection
     try {
         c.connectTimeout = 15000; c.readTimeout = 30000
-        if (c.responseCode !in 200..299) return null
-        decodeSampled(c.inputStream.use { it.readBytes() }, 900)
+        val code = c.responseCode
+        if (code in 200..299) Fetched(c.inputStream.use { it.readBytes() }, false)
+        else Fetched(null, code >= 500 || code == 408 || code == 429)
     } finally { c.disconnect() }
-}.getOrNull()
+} catch (_: Exception) { Fetched(null, true) }
 
-/** Loads an image over HTTP with a small in-memory cache (no third-party image library). */
+private val RETRY_DELAYS_MS = longArrayOf(0, 1000, 3000)
+
+/** Memory → disk → network (3 attempts with back-off). Null means it failed. */
+private suspend fun loadBitmap(ctx: Context, url: String): Bitmap? = withContext(Dispatchers.IO) {
+    ImageDiskCache.get(ctx, url)?.let { b -> decodeSampled(b, 900)?.let { return@withContext it } }
+    for (d in RETRY_DELAYS_MS) {
+        if (d > 0) delay(d)
+        val r = fetchBytes(url)
+        val bytes = r.bytes
+        if (bytes != null) {
+            val bmp = decodeSampled(bytes, 900) ?: return@withContext null
+            ImageDiskCache.put(ctx, url, bytes)
+            return@withContext bmp
+        }
+        if (!r.retryable) break
+    }
+    null
+}
+
+/** Loads an image over HTTP (memory + disk cache, retry with back-off). A failed load shows a tap-to-retry placeholder. */
 @Composable
-fun RemoteImage(url: String, modifier: Modifier = Modifier, contentScale: ContentScale = ContentScale.Crop) {
+fun RemoteImage(url: String, modifier: Modifier = Modifier, contentScale: ContentScale = ContentScale.Crop, contentDescription: String? = null) {
+    val ctx = LocalContext.current.applicationContext
     var bmp by remember(url) { mutableStateOf(ImageCache.get(url)) }
-    LaunchedEffect(url) {
+    var failed by remember(url) { mutableStateOf(false) }
+    var attempt by remember(url) { mutableIntStateOf(0) }
+    LaunchedEffect(url, attempt) {
         if (bmp == null) {
-            bmp = withContext(Dispatchers.IO) { download(url) }?.also { ImageCache.put(url, it) }
+            failed = false
+            val loaded = loadBitmap(ctx, url)
+            if (loaded != null) { ImageCache.put(url, loaded); bmp = loaded } else failed = true
         }
     }
     val b = bmp
     if (b != null) {
-        Image(b.asImageBitmap(), contentDescription = null, modifier = modifier, contentScale = contentScale)
+        Image(b.asImageBitmap(), contentDescription = contentDescription, modifier = modifier, contentScale = contentScale)
+    } else if (failed) {
+        Box(
+            modifier.background(MaterialTheme.colorScheme.surfaceVariant)
+                .clickable(onClickLabel = "تلاش دوباره") { attempt++ }
+                .semantics { this.contentDescription = "بارگذاری تصویر ناموفق بود. برای تلاش دوباره بزنید" },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Outlined.BrokenImage, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
+        }
     } else {
         Box(modifier.background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
             Icon(Icons.Outlined.Image, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))

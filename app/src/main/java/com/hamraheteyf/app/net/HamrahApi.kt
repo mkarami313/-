@@ -4,6 +4,7 @@ import android.content.Context
 import com.hamraheteyf.app.BuildConfig
 import com.hamraheteyf.app.data.model.User
 import com.hamraheteyf.app.data.repository.fake.Db
+import com.hamraheteyf.app.security.TokenCrypto
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -20,7 +21,16 @@ import java.net.URL
 /** Result of one API call: either a payload, or a Persian error message. */
 sealed interface ApiResult<out T> {
     data class Ok<T>(val data: T) : ApiResult<T>
-    data class Fail(val message: String) : ApiResult<Nothing>
+    data class Fail(val message: String, val network: Boolean = false) : ApiResult<Nothing>
+}
+
+/** Sentinel [ApiResult.Fail] message for HTTP 401; UI code must map it to Persian text, never show it raw. */
+const val API_UNAUTHORIZED = "UNAUTHORIZED"
+
+/** Result of [HamrahApi.fetchState]. */
+sealed interface StateFetch {
+    data object Unchanged : StateFetch
+    data class Fresh(val db: Db, val etag: String?, val raw: String) : StateFetch
 }
 
 /** Parsed login/register response. */
@@ -45,23 +55,94 @@ class HamrahApi(context: Context) {
         explicitNulls = false
     }
 
+    /** Called (from any thread) whenever an authenticated call comes back 401. */
+    @Volatile var onUnauthorized: (() -> Unit)? = null
+
+    @Volatile private var tokenCache: String? = null
+    @Volatile private var tokenLoaded = false
+    @Volatile private var etagActionSupported = true
+
+    /** Session token; encrypted at rest. A plain token from older versions is migrated on first read. */
     var token: String?
-        get() = prefs.getString("token", null)
-        set(v) = prefs.edit().apply { if (v == null) remove("token") else putString("token", v) }.apply()
+        get() {
+            if (!tokenLoaded) synchronized(this) {
+                if (!tokenLoaded) { tokenCache = readToken(); tokenLoaded = true }
+            }
+            return tokenCache
+        }
+        set(v) = synchronized(this) {
+            tokenCache = v
+            tokenLoaded = true
+            writeToken(v)
+        }
+
+    private fun readToken(): String? {
+        prefs.getString(KEY_TOKEN_ENC, null)?.let { return TokenCrypto.decrypt(it) }
+        val plain = prefs.getString(KEY_TOKEN, null) ?: return null
+        TokenCrypto.encrypt(plain)?.let { enc ->
+            if (TokenCrypto.decrypt(enc) == plain) {
+                prefs.edit().putString(KEY_TOKEN_ENC, enc).remove(KEY_TOKEN).commit()
+            }
+        }
+        return plain
+    }
+
+    private fun writeToken(v: String?) {
+        val e = prefs.edit()
+        if (v == null) {
+            e.remove(KEY_TOKEN).remove(KEY_TOKEN_ENC)
+        } else {
+            val enc = TokenCrypto.encrypt(v)
+            if (enc != null) e.putString(KEY_TOKEN_ENC, enc).remove(KEY_TOKEN)
+            else e.putString(KEY_TOKEN, v).remove(KEY_TOKEN_ENC)
+        }
+        e.commit()
+    }
 
     var savedUid: String?
         get() = prefs.getString("uid", null)
         set(v) = prefs.edit().apply { if (v == null) remove("uid") else putString("uid", v) }.apply()
 
     fun clearSession() {
-        prefs.edit().remove("token").remove("uid").apply()
+        synchronized(this) {
+            tokenCache = null
+            tokenLoaded = true
+            prefs.edit().remove(KEY_TOKEN).remove(KEY_TOKEN_ENC).remove("uid").commit()
+        }
     }
 
     // ------------------------------------------------------------------ transport
 
+    private companion object {
+        const val KEY_TOKEN = "token"
+        const val KEY_TOKEN_ENC = "token_enc"
+        const val NET_ERR = "خطای ارتباط با سرور. اتصال اینترنت را بررسی کنید."
+    }
+
+    private class RawBytes(val code: Int, val bytes: ByteArray?)
+
+    private fun requestBytes(method: String, path: String, bodyJson: String?, readTimeoutMs: Int): RawBytes {
+        val c = URL(base + path).openConnection() as HttpURLConnection
+        return try {
+            c.requestMethod = method
+            c.connectTimeout = 15000
+            c.readTimeout = readTimeoutMs
+            token?.let { c.setRequestProperty("Authorization", "Bearer $it") }
+            if (bodyJson != null) {
+                c.doOutput = true
+                c.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                c.outputStream.use { it.write(bodyJson.toByteArray(Charsets.UTF_8)) }
+            }
+            val code = c.responseCode
+            RawBytes(code, if (code == 200) c.inputStream.use { it.readBytes() } else null)
+        } finally {
+            c.disconnect()
+        }
+    }
+
     private data class Raw(val code: Int, val body: String)
 
-    private fun request(method: String, path: String, bodyJson: String?, auth: Boolean): Raw {
+    private fun request(method: String, path: String, bodyJson: String?, auth: Boolean, tokenOverride: String? = null): Raw {
         val url = URL(base + path)
         val c = url.openConnection() as HttpURLConnection
         return try {
@@ -69,7 +150,7 @@ class HamrahApi(context: Context) {
             c.connectTimeout = 15000
             c.readTimeout = 30000
             c.setRequestProperty("Accept", "application/json")
-            if (auth) token?.let { c.setRequestProperty("Authorization", "Bearer $it") }
+            if (auth) (tokenOverride ?: token)?.let { c.setRequestProperty("Authorization", "Bearer $it") }
             if (bodyJson != null) {
                 c.doOutput = true
                 c.setRequestProperty("Content-Type", "application/json; charset=utf-8")
@@ -102,7 +183,7 @@ class HamrahApi(context: Context) {
                     ApiResult.Ok(AuthResponse(token, json.decodeFromJsonElement(User.serializer(), userEl)))
                 } else ApiResult.Fail(errorOf(obj))
             },
-            onFailure = { ApiResult.Fail("خطای ارتباط با سرور. اتصال اینترنت را بررسی کنید.") },
+            onFailure = { ApiResult.Fail(NET_ERR, network = true) },
         )
     }
 
@@ -116,7 +197,7 @@ class HamrahApi(context: Context) {
                     ApiResult.Ok(AuthResponse(token, json.decodeFromJsonElement(User.serializer(), userEl)))
                 } else ApiResult.Fail(errorOf(obj))
             },
-            onFailure = { ApiResult.Fail("خطای ارتباط با سرور. اتصال اینترنت را بررسی کنید.") },
+            onFailure = { ApiResult.Fail(NET_ERR, network = true) },
         )
     }
 
@@ -127,15 +208,18 @@ class HamrahApi(context: Context) {
 
     fun fileUrl(id: String): String = base + "files/" + id
 
-    /** Persian speech (WAV bytes) synthesized on the server; null when unavailable. */
+    /** Persian speech (WAV bytes) synthesized on the server; null when unavailable. POST JSON, GET for old servers. */
     suspend fun tts(text: String): ByteArray? = withContext(Dispatchers.IO) {
         runCatching {
-            val c = URL(base + "tts?text=" + java.net.URLEncoder.encode(text, "UTF-8")).openConnection() as HttpURLConnection
-            try {
-                c.connectTimeout = 15000; c.readTimeout = 40000
-                token?.let { c.setRequestProperty("Authorization", "Bearer $it") }
-                if (c.responseCode == 200) c.inputStream.use { it.readBytes() } else null
-            } finally { c.disconnect() }
+            val body = kotlinx.serialization.json.buildJsonObject {
+                put("text", kotlinx.serialization.json.JsonPrimitive(text))
+            }.toString()
+            val r = requestBytes("POST", "tts", body, 40000)
+            when (r.code) {
+                200 -> r.bytes
+                404, 405, 501 -> requestBytes("GET", "tts?text=" + java.net.URLEncoder.encode(text, "UTF-8"), null, 40000).bytes
+                else -> null
+            }
         }.getOrNull()
     }
 
@@ -160,7 +244,7 @@ class HamrahApi(context: Context) {
             } finally {
                 c.disconnect()
             }
-        }.getOrElse { ApiResult.Fail("آپلود انجام نشد. اتصال اینترنت را بررسی کنید.") }
+        }.getOrElse { ApiResult.Fail("آپلود انجام نشد. اتصال اینترنت را بررسی کنید.", network = true) }
     }
 
     /** Ids of modules the server has switched off. Null when the call fails (keep the last known set). */
@@ -171,45 +255,83 @@ class HamrahApi(context: Context) {
         }.getOrNull()
     }
 
-    /** Fetches the caller-scoped snapshot. 401 signals an expired/invalid session. */
-    suspend fun fetchState(): ApiResult<Db> = withContext(Dispatchers.IO) {
+    /**
+     * Fetches the caller-scoped snapshot. With an [etag] it asks the server first whether anything
+     * changed (action "state"); servers without that action (404) are remembered and served by plain GET.
+     * 401 → Fail([API_UNAUTHORIZED]); transport errors → Fail(network = true).
+     */
+    suspend fun fetchState(etag: String? = null): ApiResult<StateFetch> = withContext(Dispatchers.IO) {
+        val sent = token
+        if (etagActionSupported) {
+            val body = kotlinx.serialization.json.buildJsonObject {
+                put("name", kotlinx.serialization.json.JsonPrimitive("state"))
+                put("args", kotlinx.serialization.json.buildJsonObject { if (etag != null) put("etag", kotlinx.serialization.json.JsonPrimitive(etag)) })
+            }.toString()
+            val raw = runCatching { request("POST", "action", body, auth = true) }.getOrElse {
+                return@withContext ApiResult.Fail(NET_ERR, network = true)
+            }
+            when {
+                raw.code == 401 -> return@withContext unauthorized(sent)
+                raw.code == 404 || raw.code == 405 -> etagActionSupported = false
+                raw.code in 200..299 -> {
+                    val obj = parse(raw.body)
+                    when (val reply = StateReplyParser.parse(obj)) {
+                        StateReply.Unchanged -> return@withContext ApiResult.Ok(StateFetch.Unchanged)
+                        is StateReply.Fresh -> return@withContext decodeState(reply.state, reply.etag)
+                        StateReply.Invalid -> return@withContext ApiResult.Fail(errorOf(obj))
+                    }
+                }
+                else -> return@withContext ApiResult.Fail(errorOf(parse(raw.body)))
+            }
+        }
         runCatching { request("GET", "state", null, auth = true) }.fold(
             onSuccess = { raw ->
                 val obj = parse(raw.body)
                 val stateEl = obj?.get("state")
                 when {
-                    raw.code == 401 -> ApiResult.Fail("UNAUTHORIZED")
-                    raw.code in 200..299 && stateEl != null ->
-                        ApiResult.Ok(json.decodeFromJsonElement(Db.serializer(), stateEl))
+                    raw.code == 401 -> unauthorized(sent)
+                    raw.code in 200..299 && stateEl != null -> decodeState(stateEl, StateReplyParser.etagOf(stateEl))
                     else -> ApiResult.Fail(errorOf(obj))
                 }
             },
-            onFailure = { ApiResult.Fail("خطای ارتباط با سرور.") },
+            onFailure = { ApiResult.Fail(NET_ERR, network = true) },
         )
+    }
+
+    private fun decodeState(el: JsonElement, etag: String?): ApiResult<StateFetch> =
+        runCatching { StateFetch.Fresh(json.decodeFromJsonElement(Db.serializer(), el), etag, el.toString()) }
+            .fold({ ApiResult.Ok(it) }, { ApiResult.Fail("پاسخ سرور نامعتبر است.") })
+
+    /** Only the session that actually sent the rejected token is torn down (not a newer login). */
+    private fun unauthorized(sent: String?): ApiResult.Fail {
+        if (sent != null && sent == token) onUnauthorized?.invoke()
+        return ApiResult.Fail(API_UNAUTHORIZED)
     }
 
     /**
      * Posts an action. Returns the (optional) `data` object and the fresh `state` the server
      * returns alongside it, so callers can refresh the mirror without a second round-trip.
      */
-    data class ActionResult(val data: JsonElement?, val state: Db?)
+    data class ActionResult(val data: JsonElement?, val state: Db?, val etag: String? = null, val stateRaw: String? = null)
 
-    suspend fun action(name: String, argsJson: String): ApiResult<ActionResult> = withContext(Dispatchers.IO) {
+    /** [tokenOverride] lets sign-out send one last call (push unregister) with the already-cleared session's token. */
+    suspend fun action(name: String, argsJson: String, tokenOverride: String? = null): ApiResult<ActionResult> = withContext(Dispatchers.IO) {
+        val sent = if (tokenOverride != null) null else token
         val body = kotlinx.serialization.json.buildJsonObject {
             put("name", kotlinx.serialization.json.JsonPrimitive(name))
             put("args", json.parseToJsonElement(argsJson))
         }.toString()
-        runCatching { request("POST", "action", body, auth = true) }.fold(
+        runCatching { request("POST", "action", body, auth = true, tokenOverride = tokenOverride) }.fold(
             onSuccess = { raw ->
                 val obj = parse(raw.body)
                 val ok = obj?.get("ok")?.jsonPrimitive?.booleanOrNull ?: false
-                if (raw.code == 401) return@fold ApiResult.Fail("UNAUTHORIZED")
+                if (raw.code == 401) return@fold unauthorized(sent)
                 if (!ok) return@fold ApiResult.Fail(errorOf(obj))
                 val stateEl = obj?.get("state")
                 val state = stateEl?.let { runCatching { json.decodeFromJsonElement(Db.serializer(), it) }.getOrNull() }
-                ApiResult.Ok(ActionResult(obj?.get("data"), state))
+                ApiResult.Ok(ActionResult(obj?.get("data"), state, StateReplyParser.etagOf(stateEl), if (state != null) stateEl.toString() else null))
             },
-            onFailure = { ApiResult.Fail("خطای ارتباط با سرور.") },
+            onFailure = { ApiResult.Fail("خطای ارتباط با سرور.", network = true) },
         )
     }
 }

@@ -53,4 +53,7 @@ class AdminViewModel(
 
     fun deleteReportedContent(report: Report, reason: String) =
         run("محتوا حذف شد.") { adminRepo.deleteContent(report.contentType, report.contentId, reason) }
+
+    fun limitUser(report: Report, status: AccountStatus, reason: String) =
+        run("وضعیت حساب ثبت شد.") { adminRepo.setAccountStatus(report.contentId, status, reason) }
 }

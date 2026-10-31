@@ -100,11 +100,18 @@ object AppFeatures {
     private val tools = AppFeature("tools", "ابزارهای روزانه", Icons.Outlined.Extension, Routes.TOOLS, order = 38, homeTile = true) { nav ->
         composable(Routes.TOOLS) {
             ToolsHubScreen(onBack = { nav.popBackStack() }, onSchedule = { nav.navigate(Routes.TOOLS_SCHEDULE) },
-                onStories = { nav.navigate(Routes.TOOLS_STORIES) }, onAac = { nav.navigate(Routes.TOOLS_AAC) })
+                onStories = { nav.navigate(Routes.TOOLS_STORIES) }, onAac = { nav.navigate(Routes.TOOLS_AAC) },
+                onLog = { nav.navigate(Routes.TOOLS_LOG) }, onEmergency = { nav.navigate(Routes.TOOLS_EMERGENCY) }, onReward = { nav.navigate(Routes.TOOLS_REWARD) },
+                onFirstThen = { nav.navigate(Routes.TOOLS_FIRSTTHEN) }, onTimer = { nav.navigate(Routes.TOOLS_TIMER) })
         }
         composable(Routes.TOOLS_SCHEDULE) { ScheduleScreen(onBack = { nav.popBackStack() }) }
         composable(Routes.TOOLS_STORIES) { StoriesScreen(onBack = { nav.popBackStack() }) }
         composable(Routes.TOOLS_AAC) { AacScreen(onBack = { nav.popBackStack() }) }
+        composable(Routes.TOOLS_LOG) { BehaviorLogScreen(onBack = { nav.popBackStack() }) }
+        composable(Routes.TOOLS_EMERGENCY) { EmergencyScreen(onBack = { nav.popBackStack() }) }
+        composable(Routes.TOOLS_REWARD) { RewardScreen(onBack = { nav.popBackStack() }) }
+        composable(Routes.TOOLS_FIRSTTHEN) { FirstThenScreen(onBack = { nav.popBackStack() }) }
+        composable(Routes.TOOLS_TIMER) { VisualTimerScreen(onBack = { nav.popBackStack() }) }
     }
 
     private val courses = AppFeature("courses", "دوره‌ها", Icons.Outlined.School, Routes.COURSES, order = 39, homeTile = true) { nav ->
@@ -155,6 +162,7 @@ object AppFeatures {
                 onAdmin = { nav.navigate(Routes.ADMIN) },
                 onRules = { nav.navigate(Routes.LEGAL_RULES) },
                 onPrivacy = { nav.navigate(Routes.LEGAL_PRIVACY) },
+                onSharesReceived = { nav.navigate(Routes.SHARES_RECEIVED) },
             )
         }
         composable(Routes.SETTINGS) { SettingsScreen(onBack = { nav.popBackStack() }) }
@@ -163,6 +171,13 @@ object AppFeatures {
         composable(Routes.VERIFICATION) { VerificationScreen(onBack = { nav.popBackStack() }) }
         composable(Routes.CHILDREN) { ChildrenScreen(onBack = { nav.popBackStack() }) }
         composable(Routes.ADMIN) { AdminScreen(onBack = { nav.popBackStack() }) }
+        composable(Routes.SHARES_RECEIVED) { SharesReceivedScreen(onBack = { nav.popBackStack() }, onOpen = { nav.navigate(Routes.shareView(it)) }) }
+        composable(Routes.SHARE_VIEW) { e -> SharedChildViewerScreen(shareId = e.arguments?.getString("id").orEmpty(), onBack = { nav.popBackStack() }) }
+        composable(Routes.ONBOARDING) {
+            com.hamraheteyf.app.ui.onboarding.OnboardingScreen(
+                onFinished = { nav.navigate(Routes.HOME) { popUpTo(Routes.ONBOARDING) { inclusive = true }; launchSingleTop = true } },
+            )
+        }
         composable(Routes.LEGAL_RULES) { CommunityRulesScreen(onBack = { nav.popBackStack() }) }
         composable(Routes.LEGAL_PRIVACY) { PrivacyPolicyScreen(onBack = { nav.popBackStack() }) }
     }

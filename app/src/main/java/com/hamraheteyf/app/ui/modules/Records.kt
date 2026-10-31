@@ -6,15 +6,20 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.hamraheteyf.app.data.model.User
 import com.hamraheteyf.app.di.LocalAppContainer
+import com.hamraheteyf.app.net.API_UNAUTHORIZED
 import com.hamraheteyf.app.net.ApiResult
 import com.hamraheteyf.app.net.HamrahApi
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.*
+
+const val SESSION_EXPIRED_MESSAGE = "نشست شما به پایان رسیده است؛ لطفاً دوباره وارد شوید."
 
 /** A generic server record: a bag of string fields plus a few system fields. */
 data class Rec(
@@ -55,7 +60,8 @@ class RecClient(private val api: HamrahApi) {
     private suspend fun call(name: String, args: JsonObject): ApiResult<JsonElement?> =
         when (val r = api.action(name, args.toString())) {
             is ApiResult.Ok -> ApiResult.Ok(r.data.data)
-            is ApiResult.Fail -> ApiResult.Fail(r.message)
+            is ApiResult.Fail ->
+                if (r.message == API_UNAUTHORIZED) ApiResult.Fail(SESSION_EXPIRED_MESSAGE) else ApiResult.Fail(r.message, r.network)
         }
 
     private val bad = ApiResult.Fail("پاسخ سرور نامعتبر است.")
@@ -133,6 +139,12 @@ fun rememberRecs(client: RecClient?, kind: String, tick: Int, mine: Boolean = fa
 
 class FieldSpec(val key: String, val label: String, val long: Boolean = false, val number: Boolean = false, val hint: String? = null)
 
+/** Saves a text-field map through rotation / process death as a flat key,value,key,value list. */
+private val StringMapSaver = listSaver<androidx.compose.runtime.snapshots.SnapshotStateMap<String, String>, String>(
+    save = { m -> m.flatMap { listOf(it.key, it.value) } },
+    restore = { l -> mutableStateMapOf<String, String>().also { m -> l.chunked(2).forEach { if (it.size == 2) m[it[0]] = it[1] } } },
+)
+
 /** Create/edit dialog for one record kind. Calls recSave and reports success through [onDone]. */
 @Composable
 fun RecFormDialog(
@@ -146,9 +158,11 @@ fun RecFormDialog(
     defaults: Map<String, String> = emptyMap(),
 ) {
     val scope = rememberCoroutineScope()
-    val values = remember { mutableStateMapOf<String, String>().also { m -> fields.forEach { m[it.key] = initial?.get(it.key) ?: defaults[it.key].orEmpty() } } }
+    val values = rememberSaveable(saver = StringMapSaver) {
+        mutableStateMapOf<String, String>().also { m -> fields.forEach { m[it.key] = initial?.get(it.key) ?: defaults[it.key].orEmpty() } }
+    }
     var busy by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var error by rememberSaveable { mutableStateOf<String?>(null) }
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
         title = { Text(title) },
