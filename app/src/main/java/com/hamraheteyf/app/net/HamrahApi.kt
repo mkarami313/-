@@ -127,6 +127,18 @@ class HamrahApi(context: Context) {
 
     fun fileUrl(id: String): String = base + "files/" + id
 
+    /** Persian speech (WAV bytes) synthesized on the server; null when unavailable. */
+    suspend fun tts(text: String): ByteArray? = withContext(Dispatchers.IO) {
+        runCatching {
+            val c = URL(base + "tts?text=" + java.net.URLEncoder.encode(text, "UTF-8")).openConnection() as HttpURLConnection
+            try {
+                c.connectTimeout = 15000; c.readTimeout = 40000
+                token?.let { c.setRequestProperty("Authorization", "Bearer $it") }
+                if (c.responseCode == 200) c.inputStream.use { it.readBytes() } else null
+            } finally { c.disconnect() }
+        }.getOrNull()
+    }
+
     /** Uploads one file (image/audio/video/PDF, up to 8 MB). Returns the absolute URL of the stored file. */
     suspend fun upload(bytes: ByteArray, mime: String, name: String): ApiResult<String> = withContext(Dispatchers.IO) {
         runCatching {

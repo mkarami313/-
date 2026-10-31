@@ -26,19 +26,61 @@ import com.hamraheteyf.app.ui.common.*
 import kotlinx.coroutines.launch
 import java.util.Locale
 
+private fun speechChunks(text: String): List<String> {
+    val out = mutableListOf<String>(); val cur = StringBuilder()
+    for (part in text.split(Regex("(?<=[.!؟?!،\\n])"))) {
+        if (cur.length + part.length > 250 && cur.isNotEmpty()) { out += cur.toString().trim(); cur.clear() }
+        cur.append(part)
+    }
+    if (cur.isNotBlank()) out += cur.toString().trim()
+    return out.filter { it.isNotBlank() }.flatMap { it.chunked(280) }
+}
+
+/**
+ * Speaks Persian text. Primary path: server-side voice (Piper), cached on the device, since
+ * stock Android TTS usually has no Persian voice. Falls back to the phone's own voice if present.
+ */
 @Composable
 fun rememberSpeaker(): (String) -> Unit {
     val ctx = LocalContext.current
-    val holder = remember { arrayOfNulls<TextToSpeech>(1) }
+    val api = com.hamraheteyf.app.di.LocalAppContainer.current.serverApi
+    val scope = rememberCoroutineScope()
+    val job = remember { arrayOfNulls<kotlinx.coroutines.Job>(1) }
+    val player = remember { arrayOfNulls<android.media.MediaPlayer>(1) }
+    val tts = remember { arrayOfNulls<TextToSpeech>(1) }
     DisposableEffect(Unit) {
-        holder[0] = TextToSpeech(ctx.applicationContext) { st -> if (st == TextToSpeech.SUCCESS) holder[0]?.language = Locale("fa") }
-        onDispose { holder[0]?.shutdown() }
+        tts[0] = TextToSpeech(ctx.applicationContext) { st -> if (st == TextToSpeech.SUCCESS) tts[0]?.language = Locale("fa") }
+        onDispose { job[0]?.cancel(); player[0]?.release(); tts[0]?.shutdown() }
+    }
+    suspend fun play(file: java.io.File) = kotlinx.coroutines.suspendCancellableCoroutine<Unit> { cont ->
+        val mp = android.media.MediaPlayer()
+        player[0] = mp
+        mp.setDataSource(file.path)
+        mp.setOnCompletionListener { mp.release(); if (cont.isActive) cont.resume(Unit) {} }
+        mp.setOnErrorListener { _, _, _ -> mp.release(); if (cont.isActive) cont.resume(Unit) {}; true }
+        cont.invokeOnCancellation { runCatching { mp.stop(); mp.release() } }
+        mp.prepare(); mp.start()
     }
     return { text ->
-        val t = holder[0]
-        if (t == null || t.isLanguageAvailable(Locale("fa")) < 0) {
-            Toast.makeText(ctx, "صدای فارسی روی این گوشی نصب نیست (تنظیمات ← تبدیل متن به گفتار).", Toast.LENGTH_LONG).show()
-        } else t.speak(text, TextToSpeech.QUEUE_FLUSH, null, "u")
+        job[0]?.cancel(); tts[0]?.stop()
+        job[0] = scope.launch {
+            val dir = java.io.File(ctx.cacheDir, "tts").apply { mkdirs() }
+            var failed = false
+            for (chunk in speechChunks(text)) {
+                val f = java.io.File(dir, java.security.MessageDigest.getInstance("SHA-1").digest(chunk.toByteArray()).joinToString("") { "%02x".format(it) } + ".wav")
+                if (!f.exists()) {
+                    val bytes = api?.tts(chunk)
+                    if (bytes == null) { failed = true; break }
+                    f.writeBytes(bytes)
+                }
+                play(f)
+            }
+            if (failed) {
+                val t = tts[0]
+                if (t != null && t.isLanguageAvailable(Locale("fa")) >= 0) t.speak(text, TextToSpeech.QUEUE_FLUSH, null, "u")
+                else Toast.makeText(ctx, "برای خواندن صوتی، اینترنت لازم است.", Toast.LENGTH_LONG).show()
+            }
+        }
     }
 }
 

@@ -26,8 +26,8 @@ android {
         applicationId = "com.hamraheteyf.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 11
-        versionName = "0.11.0"
+        versionCode = 12
+        versionName = "0.11.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

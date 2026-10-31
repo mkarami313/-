@@ -1699,6 +1699,34 @@ def save_upload(store, uid, mime, data, name):
     return {"id": fid, "url": "files/%s" % fid, "mime": mime, "size": len(data)}
 
 
+TTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tts")
+TTS_MAX = 300
+_tts_lock = threading.Lock()
+
+
+def tts_wav(text):
+    """Persian speech via Piper (fa_IR-amir). Results are cached on disk by text hash."""
+    import hashlib, subprocess
+    cache = os.path.join(TTS_DIR, "cache")
+    os.makedirs(cache, exist_ok=True)
+    path = os.path.join(cache, hashlib.sha1(text.encode("utf-8")).hexdigest() + ".wav")
+    if not os.path.exists(path):
+        with _tts_lock:
+            if not os.path.exists(path):
+                files = sorted((os.path.join(cache, f) for f in os.listdir(cache)), key=os.path.getmtime)
+                for old in files[:-3000]:
+                    os.remove(old)
+                tmp = path + ".part"
+                r = subprocess.run(
+                    [os.path.join(TTS_DIR, "venv/bin/python"), "-m", "piper", "-m", os.path.join(TTS_DIR, "fa_IR-amir-medium.onnx"), "-f", tmp],
+                    input=text.encode("utf-8"), capture_output=True, timeout=60)
+                if r.returncode != 0 or not os.path.exists(tmp):
+                    raise RuntimeError(r.stderr.decode("utf-8", "ignore")[-120:] or "piper failed")
+                os.replace(tmp, path)
+    with open(path, "rb") as f:
+        return f.read()
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -1746,6 +1774,24 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "private, max-age=31536000, immutable")
             self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path.startswith("/api/tts"):
+            if not self._uid():
+                return self._send(401, {"ok": False, "error": NOT_SIGNED_IN})
+            from urllib.parse import urlparse, parse_qs
+            text = (parse_qs(urlparse(self.path).query).get("text") or [""])[0].strip()
+            if not text or len(text) > TTS_MAX:
+                return self._send(400, {"ok": False, "error": "متن نامعتبر است."})
+            try:
+                body = tts_wav(text)
+            except Exception as e:
+                return self._send(503, {"ok": False, "error": "تبدیل متن به صدا ممکن نشد: %s" % e})
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/wav")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "private, max-age=31536000, immutable")
             self.end_headers()
             self.wfile.write(body)
             return
