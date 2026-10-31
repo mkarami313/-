@@ -4,29 +4,35 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Forum
+import androidx.compose.material.icons.outlined.Groups
+import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.hamraheteyf.app.di.LocalAppContainer
 import com.hamraheteyf.app.di.appViewModelFactory
 import com.hamraheteyf.app.ui.common.*
+import com.hamraheteyf.app.ui.navigation.AppFeature
+import com.hamraheteyf.app.ui.navigation.Routes
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
+    tiles: List<AppFeature>,
+    onNavigate: (String) -> Unit,
     onOpenQuestion: (String) -> Unit,
     onOpenGroup: (String) -> Unit,
     onOpenGuide: (String) -> Unit,
-    onAskQuestion: () -> Unit,
-    onOpenGroups: () -> Unit,
-    onOpenGuides: () -> Unit,
-    onOpenDirectory: () -> Unit,
-    onOpenNotifications: () -> Unit,
 ) {
     val container = LocalAppContainer.current
     val vm: HomeViewModel = viewModel(factory = appViewModelFactory {
@@ -44,7 +50,7 @@ fun HomeScreen(
                 title = "سلام${user?.let { "، ${it.displayName}" } ?: ""}",
                 actions = {
                     BadgedBox(badge = { if (unread > 0) Badge { Text(unread.toPersianDigits()) } }) {
-                        IconButton(onClick = onOpenNotifications) {
+                        IconButton(onClick = { onNavigate(Routes.NOTIFICATIONS) }) {
                             Icon(Icons.Outlined.Notifications, contentDescription = "اعلان‌ها", tint = Color.White)
                         }
                     }
@@ -52,60 +58,88 @@ fun HomeScreen(
             )
         },
     ) { padding ->
-        Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-            // Search entry (navigates to directory for people/specialists search).
-            OutlinedCard(onClick = onOpenDirectory, modifier = Modifier.fillMaxWidth()) {
-                Row(Modifier.padding(14.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                    Icon(Icons.Outlined.Search, contentDescription = null, tint = mutedColor())
+        Column(
+            Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState())
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Surface(
+                onClick = { onNavigate(Routes.DIRECTORY) },
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Outlined.Search, contentDescription = null, tint = mutedColor(), modifier = Modifier.size(20.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text("جست‌وجوی متخصصان و موضوع‌ها", color = mutedColor())
+                    Text("جست‌وجوی متخصصان و موضوع‌ها", style = MaterialTheme.typography.bodyMedium, color = mutedColor())
                 }
             }
 
-            Spacer(Modifier.height(12.dp))
+            ActionTile("پرسش بپرس", Icons.Outlined.Edit, primary = true, onClick = { onNavigate(Routes.QA_CREATE) }, modifier = Modifier.fillMaxWidth())
+            tiles.chunked(2).forEach { rowItems ->
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    rowItems.forEach { f ->
+                        ActionTile(f.title, f.icon, onClick = { onNavigate(f.entryRoute) }, modifier = Modifier.weight(1f))
+                    }
+                    if (rowItems.size == 1) Spacer(Modifier.weight(1f))
+                }
+            }
+
             SafetyBanner()
 
-            Spacer(Modifier.height(16.dp))
-            Row {
-                BigPrimaryButton(text = "پرسش بپرس", onClick = onAskQuestion, modifier = Modifier.weight(1f))
-                Spacer(Modifier.width(12.dp))
-                OutlinedButton(onClick = onOpenGroups, modifier = Modifier.weight(1f).heightIn(min = 52.dp)) { Text("گروه‌ها") }
-            }
+            SectionHeader("پرسش‌های تازه", "همه", { onNavigate(Routes.QA) })
+            if (questions.isEmpty()) EmptyHint("هنوز پرسشی ثبت نشده است. اولین پرسش را شما بپرسید.")
+            questions.take(4).forEach { (q, author) -> QuestionCard(q, author) { onOpenQuestion(q.id) } }
 
-            SectionHeader("پرسش‌های تازه")
-            if (questions.isEmpty()) EmptyState("هنوز پرسشی ثبت نشده است.")
-            questions.forEach { (q, author) ->
-                QuestionCard(q, author) { onOpenQuestion(q.id) }
-                Spacer(Modifier.height(10.dp))
-            }
+            SectionHeader("گروه‌های فعال", "همه", { onNavigate(Routes.GROUPS) })
+            if (groups.isEmpty()) EmptyHint("هنوز گروهی ساخته نشده است.")
+            groups.take(3).forEach { g -> GroupCard(g) { onOpenGroup(g.id) } }
 
-            SectionHeader("گروه‌های فعال")
-            if (groups.isEmpty()) EmptyState("گروهی برای نمایش وجود ندارد.")
-            groups.take(3).forEach { g ->
-                GroupCard(g) { onOpenGroup(g.id) }
-                Spacer(Modifier.height(10.dp))
-            }
-
-            Spacer(Modifier.height(20.dp))
-            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                Text("راهنماهای منتخب", style = MaterialTheme.typography.titleMedium)
-                Spacer(Modifier.weight(1f))
-                TextButton(onClick = onOpenGuides) { Text("همه") }
-            }
+            SectionHeader("راهنماهای منتخب", "همه", { onNavigate(Routes.GUIDES) })
+            if (guides.isEmpty()) EmptyHint("هنوز راهنمایی منتشر نشده است.")
+            guides.take(2).forEach { g -> GuideCard(g) { onOpenGuide(g.id) } }
             Spacer(Modifier.height(8.dp))
-            if (guides.isEmpty()) EmptyState("راهنمایی برای نمایش وجود ندارد.")
-            guides.take(2).forEach { g ->
-                GuideCard(g) { onOpenGuide(g.id) }
-                Spacer(Modifier.height(10.dp))
-            }
-            Spacer(Modifier.height(24.dp))
         }
     }
 }
 
 @Composable
-private fun SectionHeader(title: String) {
-    Spacer(Modifier.height(20.dp))
-    Text(title, style = MaterialTheme.typography.titleMedium)
-    Spacer(Modifier.height(8.dp))
+private fun ActionTile(
+    label: String,
+    icon: ImageVector,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    primary: Boolean = false,
+) {
+    val bg = if (primary) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primaryContainer
+    val fg = if (primary) Color.White else MaterialTheme.colorScheme.onPrimaryContainer
+    Surface(onClick = onClick, shape = RoundedCornerShape(16.dp), color = bg, modifier = modifier.heightIn(min = 64.dp)) {
+        Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, contentDescription = null, tint = fg, modifier = Modifier.size(26.dp))
+            Spacer(Modifier.width(10.dp))
+            Text(label, style = MaterialTheme.typography.titleSmall, color = fg, maxLines = 1)
+        }
+    }
+}
+
+@Composable
+private fun SectionHeader(title: String, action: String, onAction: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+        TextButton(onClick = onAction, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
+            Text(action, style = MaterialTheme.typography.labelLarge)
+        }
+    }
+}
+
+@Composable
+private fun EmptyHint(text: String) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(text, style = MaterialTheme.typography.bodyMedium, color = mutedColor(), modifier = Modifier.padding(14.dp))
+    }
 }
