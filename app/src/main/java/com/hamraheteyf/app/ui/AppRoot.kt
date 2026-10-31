@@ -61,7 +61,7 @@ private data class BottomItem(val route: String, val label: String, val icon: Im
 
 private val bottomItems = listOf(
     BottomItem(Routes.HOME, "خانه", Icons.Outlined.Home),
-    BottomItem(Routes.QA, "پرسش‌وپاسخ", Icons.Outlined.Forum),
+    BottomItem(Routes.QA, "پرسش‌ها", Icons.Outlined.Forum),
     BottomItem(Routes.GROUPS, "گروه‌ها", Icons.Outlined.Groups),
     BottomItem(Routes.MESSAGES, "پیام‌ها", Icons.Outlined.Mail),
     BottomItem(Routes.PROFILE, "پروفایل", Icons.Outlined.Person),
@@ -88,7 +88,14 @@ private fun MainNavHost() {
                                 }
                             },
                             icon = { Icon(item.icon, contentDescription = item.label) },
-                            label = { Text(item.label) },
+                            label = {
+                                Text(
+                                    item.label,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            },
                         )
                     }
                 }
