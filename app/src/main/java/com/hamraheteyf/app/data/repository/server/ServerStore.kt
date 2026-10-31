@@ -37,7 +37,7 @@ private const val POLL_INTERVAL_MS = 5000L
  * A background poller re-reads `/state` every few seconds so changes made by OTHER users
  * (new answers, messages, verification results) also show up without a user action.
  */
-class ServerStore(val api: HamrahApi) {
+class ServerStore(val api: HamrahApi, private val context: android.content.Context) {
 
     /** The mirror. Seeded empty; replaced wholesale on every refresh. */
     val mirror = FakeStore(Db(), emptyMap())
@@ -49,6 +49,8 @@ class ServerStore(val api: HamrahApi) {
 
     /** Called on app start: if a saved session exists, show it optimistically and refresh. */
     fun bootstrap() {
+        com.hamraheteyf.app.ui.navigation.FeatureFlags.load(context)
+        scope.launch { syncFeatures() }
         val uid = api.savedUid
         if (api.token != null && uid != null) {
             mirror.currentUserId.value = uid
@@ -69,7 +71,12 @@ class ServerStore(val api: HamrahApi) {
         com.hamraheteyf.app.push.PushRegistration.register(api)  // register device for push
     }
 
+    private suspend fun syncFeatures() {
+        api.fetchDisabledFeatures()?.let { com.hamraheteyf.app.ui.navigation.FeatureFlags.update(context, it) }
+    }
+
     suspend fun refresh() {
+        syncFeatures()
         when (val r = api.fetchState()) {
             is ApiResult.Ok -> mirror.state.value = r.data
             is ApiResult.Fail -> if (r.message == "UNAUTHORIZED") signOut()

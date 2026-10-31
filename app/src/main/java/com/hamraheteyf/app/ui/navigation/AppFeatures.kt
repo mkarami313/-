@@ -2,6 +2,8 @@ package com.hamraheteyf.app.ui.navigation
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.navigation.compose.composable
 import com.hamraheteyf.app.ui.admin.AdminScreen
 import com.hamraheteyf.app.ui.directory.DirectoryScreen
@@ -26,8 +28,9 @@ import com.hamraheteyf.app.ui.qa.QaListScreen
 object AppFeatures {
     private val home = AppFeature("home", "خانه", Icons.Outlined.Home, Routes.HOME, order = 0, bottomTab = true) { nav ->
         composable(Routes.HOME) {
+            val disabled by FeatureFlags.disabled.collectAsState()
             HomeScreen(
-                tiles = all.filter { it.homeTile },
+                tiles = enabled(disabled).filter { it.homeTile },
                 onNavigate = { nav.navigate(it) { launchSingleTop = true } },
                 onOpenQuestion = { nav.navigate(Routes.qaDetail(it)) },
                 onOpenGroup = { nav.navigate(Routes.groupDetail(it)) },
@@ -110,4 +113,7 @@ object AppFeatures {
     /** Add new modules here. */
     val all: List<AppFeature> = listOf(home, qa, groups, messages, guides, directory, profile).sortedBy { it.order }
     val bottomTabs: List<AppFeature> = all.filter { it.bottomTab }
+
+    /** Modules currently enabled by the server (core ones are never disabled). */
+    fun enabled(disabled: Set<String>): List<AppFeature> = all.filter { it.id !in disabled }
 }

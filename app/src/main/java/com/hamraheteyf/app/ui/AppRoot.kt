@@ -15,6 +15,7 @@ import com.hamraheteyf.app.di.LocalAppContainer
 import com.hamraheteyf.app.ui.auth.LoginScreen
 import com.hamraheteyf.app.ui.auth.RegisterScreen
 import com.hamraheteyf.app.ui.navigation.AppFeatures
+import com.hamraheteyf.app.ui.navigation.FeatureFlags
 import com.hamraheteyf.app.ui.navigation.Routes
 
 @Composable
@@ -38,7 +39,8 @@ private fun MainNavHost() {
     val nav = rememberNavController()
     val backStackEntry by nav.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
-    val tabs = AppFeatures.bottomTabs
+    val disabled by FeatureFlags.disabled.collectAsState()
+    val tabs = AppFeatures.enabled(disabled).filter { it.bottomTab }
 
     Scaffold(
         bottomBar = {

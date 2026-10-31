@@ -125,6 +125,14 @@ class HamrahApi(context: Context) {
             .fold({ ApiResult.Ok(Unit) }, { ApiResult.Ok(Unit) })
     }
 
+    /** Ids of modules the server has switched off. Null when the call fails (keep the last known set). */
+    suspend fun fetchDisabledFeatures(): Set<String>? = withContext(Dispatchers.IO) {
+        runCatching {
+            val obj = parse(request("GET", "features", null, auth = false).body)
+            obj?.get("disabled")?.let { el -> json.decodeFromJsonElement(kotlinx.serialization.builtins.ListSerializer(kotlinx.serialization.serializer<String>()), el).toSet() }
+        }.getOrNull()
+    }
+
     /** Fetches the caller-scoped snapshot. 401 signals an expired/invalid session. */
     suspend fun fetchState(): ApiResult<Db> = withContext(Dispatchers.IO) {
         runCatching { request("GET", "state", null, auth = true) }.fold(

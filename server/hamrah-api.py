@@ -22,6 +22,7 @@ so the existing reactive UI keeps working unchanged.
 CLI:
   python3 hamrah-api.py                      # run the server
   python3 hamrah-api.py init-db              # create tables + seed guides (idempotent)
+  python3 hamrah-api.py feature ID on|off                 # toggle a module for all users
   python3 hamrah-api.py create-admin EMAIL PASSWORD "نام"   # make/replace an admin account
 """
 
@@ -1106,6 +1107,34 @@ def a_setAccountStatus(store, uid, args):
     _log_admin(store, uid, action, "USER", args.get("userId"), reason)
 
 
+CORE_FEATURES = {"home", "profile"}
+KNOWN_FEATURES = {"home", "qa", "groups", "messages", "guides", "directory", "profile"}
+
+
+def disabled_features(store):
+    doc = store.get("config", "features") or {}
+    return [f for f in doc.get("disabled", []) if f not in CORE_FEATURES]
+
+
+def set_feature(store, fid, enabled):
+    if fid in CORE_FEATURES:
+        raise ApiError("این بخش پایه است و خاموش نمی‌شود.")
+    doc = store.get("config", "features") or {"id": "features", "disabled": []}
+    off = set(doc.get("disabled", []))
+    (off.discard if enabled else off.add)(fid)
+    doc["disabled"] = sorted(off)
+    store.put("config", doc)
+
+
+def a_setFeatureEnabled(store, uid, args):
+    _require(uid)
+    if not is_admin(store, uid):
+        raise ApiError("دسترسی مدیر لازم است.")
+    fid = _s(args.get("id"))
+    set_feature(store, fid, bool(args.get("enabled")))
+    _log_admin(store, uid, "SET_FEATURE", "FEATURE", fid, "enabled=%s" % bool(args.get("enabled")))
+
+
 ACTIONS = {name[2:]: fn for name, fn in list(globals().items())
            if name.startswith("a_") and callable(fn)}
 
@@ -1271,6 +1300,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.rstrip("/") == "/api/health":
             return self._send(200, {"ok": True})
+        if self.path.rstrip("/") == "/api/features":
+            try:
+                return self._send(200, {"ok": True, "disabled": disabled_features(Store())})
+            except Exception as e:
+                return self._send(500, {"ok": False, "error": "خطای سرور: %s" % e})
         if self.path.rstrip("/") == "/api/notifications":
             # Light endpoint for the background push poller (just the caller's notifications).
             uid = self._uid()
@@ -1383,6 +1417,9 @@ def main():
         cmd = sys.argv[1]
         if cmd == "init-db":
             return cmd_init_db()
+        if cmd == "feature":  # feature ID on|off
+            set_feature(Store(), sys.argv[2], sys.argv[3] == "on")
+            return print("disabled:", disabled_features(Store()))
         if cmd == "create-admin":
             return cmd_create_admin(sys.argv[2], sys.argv[3], sys.argv[4])
         print("unknown command: %s" % cmd)

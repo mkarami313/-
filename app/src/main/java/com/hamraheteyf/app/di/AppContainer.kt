@@ -30,7 +30,7 @@ interface AppContainer {
  * every mutation to the API. A persisted session is restored at startup via [ServerStore.bootstrap].
  */
 class ServerAppContainer(context: Context) : AppContainer {
-    private val store = ServerStore(HamrahApi(context)).also { it.bootstrap() }
+    private val store = ServerStore(HamrahApi(context), context.applicationContext).also { it.bootstrap() }
 
     override val authRepository: AuthRepository = ServerAuthRepository(store)
     override val userRepository: UserRepository = ServerUserRepository(store)
