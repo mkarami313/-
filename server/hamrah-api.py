@@ -1267,6 +1267,36 @@ def do_login(args):
 # HTTP handler
 # --------------------------------------------------------------------------------------
 
+# --------------------------------------------------------------------------------------
+# File uploads (images / audio / video / PDF). Files get an unguessable id; anyone holding the
+# id-URL can read it (capability URL) — the id is only ever shared inside signed-in content.
+# --------------------------------------------------------------------------------------
+
+UPLOAD_DIR = os.environ.get("UPLOAD_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads"))
+MAX_UPLOAD = 8 * 1024 * 1024
+UPLOAD_TYPES = {
+    "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif",
+    "audio/mp4": "m4a", "audio/mpeg": "mp3", "audio/ogg": "ogg", "audio/aac": "aac",
+    "video/mp4": "mp4", "application/pdf": "pdf",
+}
+MIME_BY_EXT = {v: k for k, v in UPLOAD_TYPES.items()}
+
+
+def save_upload(store, uid, mime, data, name):
+    ext = UPLOAD_TYPES.get(mime)
+    if not ext:
+        raise ApiError("نوع فایل پشتیبانی نمی‌شود.")
+    if not data or len(data) > MAX_UPLOAD:
+        raise ApiError("حجم فایل باید کمتر از ۸ مگابایت باشد.")
+    fid = secrets.token_hex(16)
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    with open(os.path.join(UPLOAD_DIR, "%s.%s" % (fid, ext)), "wb") as f:
+        f.write(data)
+    store.put("files", {"id": fid, "ownerId": uid, "mime": mime, "size": len(data),
+                        "name": _s(name)[:120], "createdAt": now_ms()})
+    return {"id": fid, "url": "files/%s" % fid, "mime": mime, "size": len(data)}
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -1298,6 +1328,25 @@ class Handler(BaseHTTPRequestHandler):
             return {}
 
     def do_GET(self):
+        if self.path.startswith("/api/files/"):
+            fid = self.path.split("?")[0].rsplit("/", 1)[-1]
+            if not (len(fid) == 32 and all(c in "0123456789abcdef" for c in fid)):
+                return self._send(404, {"ok": False, "error": "یافت نشد."})
+            doc = Store().get("files", fid)
+            ext = UPLOAD_TYPES.get(doc["mime"]) if doc else None
+            path = os.path.join(UPLOAD_DIR, "%s.%s" % (fid, ext)) if ext else None
+            if not path or not os.path.exists(path):
+                return self._send(404, {"ok": False, "error": "یافت نشد."})
+            with open(path, "rb") as f:
+                body = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", doc["mime"])
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "private, max-age=31536000, immutable")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path.rstrip("/") == "/api/health":
             return self._send(200, {"ok": True})
         if self.path.rstrip("/") == "/api/features":
@@ -1332,6 +1381,22 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.rstrip("/")
+        if path == "/api/upload":
+            uid = self._uid()
+            n = int(self.headers.get("Content-Length", "0") or "0")
+            if not uid:
+                return self._send(401, {"ok": False, "error": NOT_SIGNED_IN})
+            if n > MAX_UPLOAD:
+                return self._send(413, {"ok": False, "error": "حجم فایل باید کمتر از ۸ مگابایت باشد."})
+            try:
+                data = self.rfile.read(n)
+                mime = (self.headers.get("Content-Type", "") or "").split(";")[0].strip().lower()
+                name = urllib.parse.unquote(self.headers.get("X-Filename", ""))
+                return self._send(200, {"ok": True, "file": save_upload(Store(), uid, mime, data, name)})
+            except ApiError as e:
+                return self._send(400, {"ok": False, "error": str(e)})
+            except Exception as e:
+                return self._send(500, {"ok": False, "error": "خطای سرور: %s" % e})
         args = self._body()
         try:
             if path == "/api/auth/register":

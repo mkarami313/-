@@ -125,6 +125,30 @@ class HamrahApi(context: Context) {
             .fold({ ApiResult.Ok(Unit) }, { ApiResult.Ok(Unit) })
     }
 
+    /** Uploads one file (image/audio/video/PDF, up to 8 MB). Returns the absolute URL of the stored file. */
+    suspend fun upload(bytes: ByteArray, mime: String, name: String): ApiResult<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val c = URL(base + "upload").openConnection() as HttpURLConnection
+            try {
+                c.requestMethod = "POST"
+                c.connectTimeout = 15000
+                c.readTimeout = 60000
+                c.doOutput = true
+                c.setFixedLengthStreamingMode(bytes.size)
+                c.setRequestProperty("Content-Type", mime)
+                c.setRequestProperty("X-Filename", java.net.URLEncoder.encode(name, "UTF-8"))
+                token?.let { c.setRequestProperty("Authorization", "Bearer $it") }
+                c.outputStream.use { it.write(bytes) }
+                val stream = if (c.responseCode in 200..299) c.inputStream else (c.errorStream ?: c.inputStream)
+                val obj = parse(stream.bufferedReader(Charsets.UTF_8).use(BufferedReader::readText))
+                val rel = obj?.get("file")?.jsonObject?.get("url")?.jsonPrimitive?.contentOrNull
+                if (c.responseCode in 200..299 && rel != null) ApiResult.Ok(base + rel) else ApiResult.Fail(errorOf(obj))
+            } finally {
+                c.disconnect()
+            }
+        }.getOrElse { ApiResult.Fail("آپلود انجام نشد. اتصال اینترنت را بررسی کنید.") }
+    }
+
     /** Ids of modules the server has switched off. Null when the call fails (keep the last known set). */
     suspend fun fetchDisabledFeatures(): Set<String>? = withContext(Dispatchers.IO) {
         runCatching {
