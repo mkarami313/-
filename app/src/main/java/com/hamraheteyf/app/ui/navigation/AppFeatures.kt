@@ -189,7 +189,8 @@ object AppFeatures {
             ToolsHubScreen(onBack = { nav.popBackStack() }, onSchedule = { nav.navigate(Routes.TOOLS_SCHEDULE) },
                 onStories = { nav.navigate(Routes.TOOLS_STORIES) }, onAac = { nav.navigate(Routes.TOOLS_AAC) },
                 onLog = { nav.navigate(Routes.TOOLS_LOG) }, onEmergency = { nav.navigate(Routes.TOOLS_EMERGENCY) }, onReward = { nav.navigate(Routes.TOOLS_REWARD) },
-                onFirstThen = { nav.navigate(Routes.TOOLS_FIRSTTHEN) }, onTimer = { nav.navigate(Routes.TOOLS_TIMER) })
+                onFirstThen = { nav.navigate(Routes.TOOLS_FIRSTTHEN) }, onTimer = { nav.navigate(Routes.TOOLS_TIMER) },
+                onMilestones = { nav.navigate(Routes.TOOLS_MILESTONES) })
         }
         composable(Routes.TOOLS_SCHEDULE) { ScheduleScreen(onBack = { nav.popBackStack() }) }
         composable(Routes.TOOLS_STORIES) { StoriesScreen(onBack = { nav.popBackStack() }) }
