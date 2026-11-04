@@ -16,3 +16,4 @@ secrets.properties
 keystore.properties
 local.properties
 __pycache__/
+.kotlin/
