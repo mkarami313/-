@@ -42,14 +42,16 @@ private fun fa(
 )
 
 val AppTypography = Typography(
-    headlineSmall = fa(FontWeight.Bold, 24, 34),
-    titleLarge = fa(FontWeight.Bold, 21, 32),
-    titleMedium = fa(FontWeight.SemiBold, 17, 26),
-    titleSmall = fa(FontWeight.SemiBold, 15, 22),
-    bodyLarge = fa(size = 16, line = 28),
-    bodyMedium = fa(size = 15, line = 25),
-    bodySmall = fa(size = 13, line = 20),
-    labelLarge = fa(FontWeight.SemiBold, 15, 20),
-    labelMedium = fa(FontWeight.Medium, 13, 18),
-    labelSmall = fa(FontWeight.Medium, 11, 16),
+    displaySmall = fa(FontWeight.Bold, 28, 40),
+    headlineMedium = fa(FontWeight.Bold, 24, 34),
+    headlineSmall = fa(FontWeight.Bold, 22, 32),
+    titleLarge = fa(FontWeight.Bold, 19, 28),
+    titleMedium = fa(FontWeight.SemiBold, 16, 25),
+    titleSmall = fa(FontWeight.SemiBold, 14, 22),
+    bodyLarge = fa(size = 15, line = 26),
+    bodyMedium = fa(size = 14, line = 23),
+    bodySmall = fa(size = 12, line = 19),
+    labelLarge = fa(FontWeight.SemiBold, 14, 20),
+    labelMedium = fa(FontWeight.Medium, 12, 17),
+    labelSmall = fa(FontWeight.Medium, 11, 15),
 )

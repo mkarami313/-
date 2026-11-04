@@ -11,11 +11,11 @@ import com.hamraheteyf.app.ui.directory.ProfileViewScreen
 import com.hamraheteyf.app.ui.donation.DonationCreateScreen
 import com.hamraheteyf.app.ui.donation.DonationDetailScreen
 import com.hamraheteyf.app.ui.donation.DonationListScreen
-import com.hamraheteyf.app.ui.groups.GroupCreateScreen
-import com.hamraheteyf.app.ui.groups.GroupDetailScreen
-import com.hamraheteyf.app.ui.groups.GroupsListScreen
-import com.hamraheteyf.app.ui.guides.GuideDetailScreen
-import com.hamraheteyf.app.ui.guides.GuidesScreen
+import com.hamraheteyf.app.ui.forum.*
+import com.hamraheteyf.app.ui.groups.GroupEditScreen
+import com.hamraheteyf.app.ui.groups.GroupScreen
+import com.hamraheteyf.app.ui.groups.GroupsHubScreen
+import com.hamraheteyf.app.ui.learn.*
 import com.hamraheteyf.app.ui.home.HomeScreen
 import com.hamraheteyf.app.ui.legal.CommunityRulesScreen
 import com.hamraheteyf.app.ui.legal.PrivacyPolicyScreen
@@ -24,9 +24,6 @@ import com.hamraheteyf.app.ui.messages.ConversationsListScreen
 import com.hamraheteyf.app.ui.notifications.NotificationsScreen
 import com.hamraheteyf.app.ui.profile.*
 import com.hamraheteyf.app.ui.modules.*
-import com.hamraheteyf.app.ui.qa.QaCreateScreen
-import com.hamraheteyf.app.ui.qa.QaDetailScreen
-import com.hamraheteyf.app.ui.qa.QaListScreen
 
 /** The registry of every module in the app. Order values decide tab / tile order. */
 object AppFeatures {
@@ -36,33 +33,123 @@ object AppFeatures {
             HomeScreen(
                 tiles = enabled(disabled).filter { it.homeTile },
                 onNavigate = { nav.navigate(it) { launchSingleTop = true } },
-                onOpenQuestion = { nav.navigate(Routes.qaDetail(it)) },
-                onOpenGroup = { nav.navigate(Routes.groupDetail(it)) },
-                onOpenGuide = { nav.navigate(Routes.guideDetail(it)) },
             )
         }
-        composable(Routes.NOTIFICATIONS) { NotificationsScreen(onBack = { nav.popBackStack() }) }
-    }
-
-    private val qa = AppFeature("qa", "پرسش‌ها", Icons.Outlined.Forum, Routes.QA, order = 10, bottomTab = true, homeTile = true) { nav ->
-        composable(Routes.QA) {
-            QaListScreen(onOpenQuestion = { nav.navigate(Routes.qaDetail(it)) }, onAsk = { nav.navigate(Routes.QA_CREATE) })
-        }
-        composable(Routes.QA_CREATE) { QaCreateScreen(onBack = { nav.popBackStack() }, onCreated = { nav.popBackStack() }) }
-        composable(Routes.QA_DETAIL) { e ->
-            QaDetailScreen(questionId = e.arguments?.getString("questionId").orEmpty(), onBack = { nav.popBackStack() })
+        composable(Routes.NOTIFICATIONS) {
+            NotificationsScreen(onBack = { nav.popBackStack() })
         }
     }
 
-    private val groups = AppFeature("groups", "گروه‌ها", Icons.Outlined.Groups, Routes.GROUPS, order = 20, bottomTab = true, homeTile = true) { nav ->
+    /** «انجمن»: forums, clinic, topics. Feature id stays "qa" so server switches keep working. */
+    private val forum = AppFeature("qa", "انجمن", Icons.Outlined.Forum, Routes.FORUM, order = 10, bottomTab = true) { nav ->
+        composable(Routes.FORUM) {
+            ForumHubScreen(
+                onOpenForum = { nav.navigate(Routes.forumList(it)) },
+                onOpenTopic = { nav.navigate(Routes.topic(it)) },
+                onNewTopic = { nav.navigate(Routes.topicNew(forumId = it)) },
+                onOpenClinic = { nav.navigate(Routes.CLINIC) },
+                onOpenGroups = { nav.navigate(Routes.GROUPS) },
+                onOpenGroup = { nav.navigate(Routes.groupDetail(it)) },
+                onSearch = { nav.navigate(Routes.SEARCH) },
+            )
+        }
+        composable(Routes.FORUM_LIST) { e ->
+            ForumTopicsScreen(
+                forumId = e.arguments?.getString("forumId").orEmpty(),
+                onBack = { nav.popBackStack() },
+                onOpenForum = { nav.navigate(Routes.forumList(it)) },
+                onOpenTopic = { nav.navigate(Routes.topic(it)) },
+                onNewTopic = { nav.navigate(Routes.topicNew(forumId = it)) },
+            )
+        }
+        composable(Routes.CLINIC) {
+            ClinicScreen(onBack = { nav.popBackStack() }, onOpenTopic = { nav.navigate(Routes.topic(it)) },
+                onAsk = { nav.navigate(Routes.topicNew(forumId = it ?: "clinic")) })
+        }
+        composable(Routes.TOPIC) { e ->
+            TopicScreen(
+                topicId = e.arguments?.getString("topicId").orEmpty(),
+                onBack = { nav.popBackStack() },
+                onOpenProfile = { nav.navigate(Routes.profileView(it)) },
+                onOpenForum = { nav.navigate(Routes.forumList(it)) },
+                onOpenGroup = { nav.navigate(Routes.groupDetail(it)) },
+                onEdit = { nav.navigate(Routes.topicEdit(it)) },
+            )
+        }
+        composable(Routes.TOPIC_NEW) { e ->
+            TopicComposerScreen(
+                forumId = e.arguments?.getString("forumId")?.ifBlank { null },
+                groupId = e.arguments?.getString("groupId")?.ifBlank { null },
+                editTopicId = null,
+                onBack = { nav.popBackStack() },
+                onDone = { id -> nav.popBackStack(); nav.navigate(Routes.topic(id)) },
+            )
+        }
+        composable(Routes.TOPIC_EDIT) { e ->
+            TopicComposerScreen(
+                forumId = null, groupId = null, editTopicId = e.arguments?.getString("topicId"),
+                onBack = { nav.popBackStack() }, onDone = { nav.popBackStack() },
+            )
+        }
+    }
+
+    /** «کانون‌ها»: groups v2 (reached from the forum hub and home). */
+    private val groups = AppFeature("groups", "کانون‌ها", Icons.Outlined.Groups, Routes.GROUPS, order = 20, homeTile = true) { nav ->
         composable(Routes.GROUPS) {
-            GroupsListScreen(onOpenGroup = { nav.navigate(Routes.groupDetail(it)) }, onCreate = { nav.navigate(Routes.GROUP_CREATE) })
+            GroupsHubScreen(onBack = { nav.popBackStack() }, onOpenGroup = { nav.navigate(Routes.groupDetail(it)) },
+                onCreate = { nav.navigate(Routes.groupEdit()) })
         }
-        composable(Routes.GROUP_CREATE) {
-            GroupCreateScreen(onBack = { nav.popBackStack() }, onCreated = { id -> nav.popBackStack(); nav.navigate(Routes.groupDetail(id)) })
+        composable(Routes.GROUP_EDIT) { e ->
+            GroupEditScreen(
+                groupId = e.arguments?.getString("groupId")?.ifBlank { null },
+                onBack = { nav.popBackStack() },
+                onSaved = { id -> nav.popBackStack(); nav.navigate(Routes.groupDetail(id)) { launchSingleTop = true } },
+            )
         }
         composable(Routes.GROUP_DETAIL) { e ->
-            GroupDetailScreen(groupId = e.arguments?.getString("groupId").orEmpty(), onBack = { nav.popBackStack() })
+            GroupScreen(
+                groupId = e.arguments?.getString("groupId").orEmpty(),
+                onBack = { nav.popBackStack() },
+                onOpenTopic = { nav.navigate(Routes.topic(it)) },
+                onNewTopic = { nav.navigate(Routes.topicNew(groupId = it)) },
+                onOpenProfile = { nav.navigate(Routes.profileView(it)) },
+                onEdit = { nav.navigate(Routes.groupEdit(it)) },
+            )
+        }
+    }
+
+    /** «آموزش‌ها»: videos + articles by category, user submissions, admin review. Id stays "guides". */
+    private val learn = AppFeature("guides", "آموزش‌ها", Icons.Outlined.PlayCircle, Routes.LEARN, order = 25, bottomTab = true) { nav ->
+        composable(Routes.LEARN) {
+            LearnHubScreen(
+                onOpenItem = { nav.navigate(Routes.learnItem(it)) },
+                onOpenList = { c, m -> nav.navigate(Routes.learnList(c, m)) },
+                onSubmit = { nav.navigate(Routes.learnSubmit()) },
+                onReview = { nav.navigate(Routes.LEARN_REVIEW) },
+            )
+        }
+        composable(Routes.LEARN_LIST) { e ->
+            LearnListScreen(
+                categoryId = e.arguments?.getString("categoryId")?.ifBlank { null },
+                mode = e.arguments?.getString("mode").orEmpty(),
+                onBack = { nav.popBackStack() }, onOpenItem = { nav.navigate(Routes.learnItem(it)) },
+            )
+        }
+        composable(Routes.LEARN_ITEM) { e ->
+            LearnItemScreen(
+                id = e.arguments?.getString("id").orEmpty(), onBack = { nav.popBackStack() },
+                onEdit = { nav.navigate(Routes.learnSubmit(it)) }, onOpenProfile = { nav.navigate(Routes.profileView(it)) },
+            )
+        }
+        composable(Routes.LEARN_SUBMIT) { e ->
+            LearnSubmitScreen(editId = e.arguments?.getString("id")?.ifBlank { null }, onBack = { nav.popBackStack() }, onDone = { nav.popBackStack() })
+        }
+        composable(Routes.LEARN_REVIEW) { LearnReviewScreen(onBack = { nav.popBackStack() }, onOpenItem = { nav.navigate(Routes.learnItem(it)) }) }
+        // legacy guide links (old notifications) open the library
+        composable(Routes.GUIDES) { LearnListScreen(categoryId = null, mode = "article", onBack = { nav.popBackStack() }, onOpenItem = { nav.navigate(Routes.learnItem(it)) }) }
+        composable(Routes.GUIDE_DETAIL) { e ->
+            LearnItemScreen(id = "l_" + e.arguments?.getString("guideId").orEmpty(), onBack = { nav.popBackStack() },
+                onEdit = { nav.navigate(Routes.learnSubmit(it)) }, onOpenProfile = { nav.navigate(Routes.profileView(it)) })
         }
     }
 
@@ -112,6 +199,7 @@ object AppFeatures {
         composable(Routes.TOOLS_REWARD) { RewardScreen(onBack = { nav.popBackStack() }) }
         composable(Routes.TOOLS_FIRSTTHEN) { FirstThenScreen(onBack = { nav.popBackStack() }) }
         composable(Routes.TOOLS_TIMER) { VisualTimerScreen(onBack = { nav.popBackStack() }) }
+        composable(Routes.TOOLS_MILESTONES) { MilestonesScreen(onBack = { nav.popBackStack() }) }
     }
 
     private val courses = AppFeature("courses", "دوره‌ها", Icons.Outlined.School, Routes.COURSES, order = 39, homeTile = true) { nav ->
@@ -124,19 +212,12 @@ object AppFeatures {
         composable(Routes.SEARCH) {
             SearchScreen(onBack = { nav.popBackStack() }, onOpen = { h ->
                 val r = when (h.type) {
-                    "question" -> Routes.qaDetail(h.id); "group" -> Routes.groupDetail(h.id); "guide" -> Routes.guideDetail(h.id)
+                    "question", "topic" -> Routes.topic(h.id); "group" -> Routes.groupDetail(h.id); "guide", "learn" -> Routes.learnItem(h.id)
                     "user" -> Routes.profileView(h.id); "donation" -> Routes.donationDetail(h.id); "course" -> Routes.courseDetail(h.id)
                     else -> Routes.PLACES
                 }
                 nav.navigate(r)
             })
-        }
-    }
-
-    private val guides = AppFeature("guides", "راهنماها", Icons.Outlined.MenuBook, Routes.GUIDES, order = 40, homeTile = true) { nav ->
-        composable(Routes.GUIDES) { GuidesScreen(onBack = { nav.popBackStack() }, onOpen = { nav.navigate(Routes.guideDetail(it)) }) }
-        composable(Routes.GUIDE_DETAIL) { e ->
-            GuideDetailScreen(guideId = e.arguments?.getString("guideId").orEmpty(), onBack = { nav.popBackStack() })
         }
     }
 
@@ -151,7 +232,7 @@ object AppFeatures {
         }
     }
 
-    private val profile = AppFeature("profile", "پروفایل", Icons.Outlined.Person, Routes.PROFILE, order = 90, bottomTab = true) { nav ->
+    private val profile = AppFeature("profile", "من", Icons.Outlined.Person, Routes.PROFILE, order = 90, bottomTab = true) { nav ->
         composable(Routes.PROFILE) {
             ProfileTabScreen(
                 onEditProfile = { nav.navigate(Routes.EDIT_PROFILE) },
@@ -183,7 +264,7 @@ object AppFeatures {
     }
 
     /** Add new modules here. */
-    val all: List<AppFeature> = listOf(home, qa, groups, messages, donations, childfile, booking, tools, courses, places, guides, directory, profile).sortedBy { it.order }
+    val all: List<AppFeature> = listOf(home, forum, groups, learn, messages, donations, childfile, booking, tools, courses, places, directory, profile).sortedBy { it.order }
     val bottomTabs: List<AppFeature> = all.filter { it.bottomTab }
 
     /** Modules currently enabled by the server (core ones are never disabled). */

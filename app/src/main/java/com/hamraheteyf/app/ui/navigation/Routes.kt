@@ -69,6 +69,48 @@ object Routes {
     const val CHILDREN = "children"
     const val ADMIN = "admin"
 
+    // Community v2 — forum, clinic, groups v2
+    const val FORUM = "forum"
+    const val FORUM_LIST = "forum_list/{forumId}"
+    fun forumList(id: String) = "forum_list/$id"
+    const val TOPIC = "topic/{topicId}"
+    fun topic(id: String) = "topic/$id"
+    const val TOPIC_NEW = "topic_new?forumId={forumId}&groupId={groupId}"
+    fun topicNew(forumId: String? = null, groupId: String? = null) = "topic_new?forumId=${forumId.orEmpty()}&groupId=${groupId.orEmpty()}"
+    const val TOPIC_EDIT = "topic_edit/{topicId}"
+    fun topicEdit(id: String) = "topic_edit/$id"
+    const val CLINIC = "clinic"
+    const val GROUP_EDIT = "group_edit?groupId={groupId}"
+    fun groupEdit(id: String? = null) = "group_edit?groupId=${id.orEmpty()}"
+
+    // Learning library (آموزش‌ها)
+    const val LEARN = "learn"
+    const val LEARN_LIST = "learn_list?categoryId={categoryId}&mode={mode}"
+    /** mode: "" (published), "video", "article", "saved", "mine" */
+    fun learnList(categoryId: String? = null, mode: String = "") = "learn_list?categoryId=${categoryId.orEmpty()}&mode=$mode"
+    const val LEARN_ITEM = "learn_item/{id}"
+    fun learnItem(id: String) = "learn_item/$id"
+    const val LEARN_SUBMIT = "learn_submit?id={id}"
+    fun learnSubmit(id: String? = null) = "learn_submit?id=${id.orEmpty()}"
+    const val LEARN_REVIEW = "learn_review"
+    const val TOOLS_MILESTONES = "tools_milestones"
+
+    /** Where a notification leads. relatedId is a topic id (t_…), conversation (conv_…), group (g_…),
+     *  learning item ("learn:l_…"), verification or user id. */
+    fun forNotification(type: String?, relatedId: String?): String? {
+        val id = relatedId?.takeIf { it.isNotBlank() } ?: return null
+        return when {
+            id.startsWith("learn:") -> learnItem(id.removePrefix("learn:"))
+            id.startsWith("t_") -> topic(id)
+            id.startsWith("conv_") -> conversation(id)
+            id.startsWith("g_") -> groupDetail(id)
+            id.startsWith("don_") -> donationDetail(id)
+            type == "VERIFICATION_RESULT" -> VERIFICATION
+            type == "BOOKING" -> BOOKING
+            else -> null
+        }
+    }
+
     const val LEGAL_RULES = "legal_rules"
     const val LEGAL_PRIVACY = "legal_privacy"
 }

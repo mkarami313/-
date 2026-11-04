@@ -32,10 +32,10 @@ import com.hamraheteyf.app.ui.navigation.Routes
 fun HomeScreen(
     tiles: List<AppFeature>,
     onNavigate: (String) -> Unit,
-    onOpenQuestion: (String) -> Unit,
-    onOpenGroup: (String) -> Unit,
-    onOpenGuide: (String) -> Unit,
 ) {
+    val onOpenQuestion: (String) -> Unit = { onNavigate(Routes.topic(it)) }
+    val onOpenGroup: (String) -> Unit = { onNavigate(Routes.groupDetail(it)) }
+    val onOpenGuide: (String) -> Unit = { onNavigate(Routes.learnItem(it)) }
     val container = LocalAppContainer.current
     val vm: HomeViewModel = viewModel(factory = appViewModelFactory {
         HomeViewModel(container.userRepository, container.questionRepository, container.groupRepository, container.guideRepository, container.notificationRepository)
