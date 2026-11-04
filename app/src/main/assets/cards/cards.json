@@ -1,0 +1,1513 @@
+{
+ "version": 2,
+ "categories": [
+  {
+   "id": "verbs",
+   "title": "فعل‌ها",
+   "color": "#3B5BDB",
+   "cards": [
+    {
+     "id": "run",
+     "word": "دویدن"
+    },
+    {
+     "id": "walk",
+     "word": "راه رفتن"
+    },
+    {
+     "id": "swim",
+     "word": "شنا کردن"
+    },
+    {
+     "id": "bike",
+     "word": "دوچرخه‌سواری"
+    },
+    {
+     "id": "climb",
+     "word": "بالا رفتن"
+    },
+    {
+     "id": "stand",
+     "word": "ایستادن"
+    },
+    {
+     "id": "kneel",
+     "word": "زانو زدن"
+    },
+    {
+     "id": "sleep",
+     "word": "خوابیدن"
+    },
+    {
+     "id": "bath",
+     "word": "حمام کردن"
+    },
+    {
+     "id": "hug",
+     "word": "بغل کردن"
+    },
+    {
+     "id": "dance",
+     "word": "رقصیدن"
+    },
+    {
+     "id": "ball",
+     "word": "توپ‌بازی"
+    },
+    {
+     "id": "exercise",
+     "word": "ورزش کردن"
+    },
+    {
+     "id": "raise",
+     "word": "دست بلند کردن"
+    },
+    {
+     "id": "bow",
+     "word": "سلام کردن"
+    },
+    {
+     "id": "no",
+     "word": "نه گفتن"
+    },
+    {
+     "id": "ok",
+     "word": "باشه گفتن"
+    },
+    {
+     "id": "eat",
+     "word": "غذا خوردن"
+    },
+    {
+     "id": "drink",
+     "word": "آب خوردن"
+    },
+    {
+     "id": "laugh",
+     "word": "خندیدن"
+    },
+    {
+     "id": "cry",
+     "word": "گریه کردن"
+    },
+    {
+     "id": "yawn",
+     "word": "خمیازه کشیدن"
+    },
+    {
+     "id": "sneeze",
+     "word": "عطسه کردن"
+    },
+    {
+     "id": "think",
+     "word": "فکر کردن"
+    },
+    {
+     "id": "listen",
+     "word": "گوش دادن"
+    },
+    {
+     "id": "look",
+     "word": "نگاه کردن"
+    },
+    {
+     "id": "talk",
+     "word": "حرف زدن"
+    },
+    {
+     "id": "write",
+     "word": "نوشتن"
+    },
+    {
+     "id": "paint",
+     "word": "نقاشی کشیدن"
+    },
+    {
+     "id": "read",
+     "word": "کتاب خواندن"
+    },
+    {
+     "id": "sing",
+     "word": "آواز خواندن"
+    },
+    {
+     "id": "clap",
+     "word": "دست زدن"
+    },
+    {
+     "id": "wave",
+     "word": "خداحافظی کردن"
+    },
+    {
+     "id": "shake",
+     "word": "دست دادن"
+    },
+    {
+     "id": "brush",
+     "word": "مسواک زدن"
+    },
+    {
+     "id": "wash",
+     "word": "دست شستن"
+    },
+    {
+     "id": "kiss",
+     "word": "بوسیدن"
+    },
+    {
+     "id": "cook",
+     "word": "آشپزی کردن"
+    },
+    {
+     "id": "call",
+     "word": "تلفن زدن"
+    },
+    {
+     "id": "wait",
+     "word": "صبر کردن"
+    },
+    {
+     "id": "sweep",
+     "word": "جارو کردن"
+    },
+    {
+     "id": "shop",
+     "word": "خرید کردن"
+    },
+    {
+     "id": "puzzle",
+     "word": "پازل درست کردن"
+    },
+    {
+     "id": "feed",
+     "word": "غذا دادن"
+    },
+    {
+     "id": "haircut",
+     "word": "مو کوتاه کردن"
+    },
+    {
+     "id": "row",
+     "word": "پارو زدن"
+    },
+    {
+     "id": "toilet",
+     "word": "دستشویی رفتن"
+    },
+    {
+     "id": "dress",
+     "word": "لباس پوشیدن"
+    }
+   ]
+  },
+  {
+   "id": "feelings",
+   "title": "حالت‌ها و احساسات",
+   "color": "#D6336C",
+   "cards": [
+    {
+     "id": "happy",
+     "word": "خوشحال"
+    },
+    {
+     "id": "very_happy",
+     "word": "خیلی خوشحال"
+    },
+    {
+     "id": "sad",
+     "word": "ناراحت"
+    },
+    {
+     "id": "crying",
+     "word": "گریان"
+    },
+    {
+     "id": "angry",
+     "word": "عصبانی"
+    },
+    {
+     "id": "furious",
+     "word": "خیلی عصبانی"
+    },
+    {
+     "id": "scared",
+     "word": "ترسیده"
+    },
+    {
+     "id": "terrified",
+     "word": "وحشت‌زده"
+    },
+    {
+     "id": "surprised",
+     "word": "متعجب"
+    },
+    {
+     "id": "tired",
+     "word": "خسته"
+    },
+    {
+     "id": "sleepy",
+     "word": "خواب‌آلود"
+    },
+    {
+     "id": "asleep",
+     "word": "خوابیده"
+    },
+    {
+     "id": "sick",
+     "word": "بیمار"
+    },
+    {
+     "id": "hurt",
+     "word": "زخمی"
+    },
+    {
+     "id": "nauseous",
+     "word": "حالت تهوع"
+    },
+    {
+     "id": "cold",
+     "word": "سردم است"
+    },
+    {
+     "id": "hot",
+     "word": "گرمم است"
+    },
+    {
+     "id": "calm",
+     "word": "آرام"
+    },
+    {
+     "id": "shy",
+     "word": "خجالتی"
+    },
+    {
+     "id": "worried",
+     "word": "نگران"
+    },
+    {
+     "id": "confused",
+     "word": "گیج"
+    },
+    {
+     "id": "excited",
+     "word": "هیجان‌زده"
+    },
+    {
+     "id": "love",
+     "word": "دوست داشتن"
+    },
+    {
+     "id": "bored",
+     "word": "بی‌حوصله"
+    },
+    {
+     "id": "cool",
+     "word": "مطمئن"
+    },
+    {
+     "id": "quiet",
+     "word": "ساکت"
+    },
+    {
+     "id": "hungry",
+     "word": "گرسنه"
+    },
+    {
+     "id": "curious",
+     "word": "کنجکاو"
+    },
+    {
+     "id": "party",
+     "word": "جشن"
+    },
+    {
+     "id": "pain",
+     "word": "درد دارم"
+    },
+    {
+     "id": "please",
+     "word": "لطفاً"
+    },
+    {
+     "id": "proud",
+     "word": "سربلند"
+    }
+   ]
+  },
+  {
+   "id": "jobs",
+   "title": "مشاغل",
+   "color": "#0E6E62",
+   "cards": [
+    {
+     "id": "doctor",
+     "word": "پزشک"
+    },
+    {
+     "id": "nurse",
+     "word": "پرستار"
+    },
+    {
+     "id": "dentist",
+     "word": "دندان‌پزشک"
+    },
+    {
+     "id": "teacher",
+     "word": "معلم"
+    },
+    {
+     "id": "chef",
+     "word": "آشپز"
+    },
+    {
+     "id": "baker",
+     "word": "نانوا"
+    },
+    {
+     "id": "firefighter",
+     "word": "آتش‌نشان"
+    },
+    {
+     "id": "police",
+     "word": "پلیس"
+    },
+    {
+     "id": "farmer",
+     "word": "کشاورز"
+    },
+    {
+     "id": "mechanic",
+     "word": "مکانیک"
+    },
+    {
+     "id": "scientist",
+     "word": "دانشمند"
+    },
+    {
+     "id": "programmer",
+     "word": "برنامه‌نویس"
+    },
+    {
+     "id": "pilot",
+     "word": "خلبان"
+    },
+    {
+     "id": "astronaut",
+     "word": "فضانورد"
+    },
+    {
+     "id": "artist",
+     "word": "نقاش"
+    },
+    {
+     "id": "singer",
+     "word": "خواننده"
+    },
+    {
+     "id": "builder",
+     "word": "کارگر ساختمان"
+    },
+    {
+     "id": "guard",
+     "word": "نگهبان"
+    },
+    {
+     "id": "detective",
+     "word": "کارآگاه"
+    },
+    {
+     "id": "judge",
+     "word": "قاضی"
+    },
+    {
+     "id": "office",
+     "word": "کارمند"
+    },
+    {
+     "id": "factory",
+     "word": "کارگر کارخانه"
+    },
+    {
+     "id": "driver",
+     "word": "راننده"
+    },
+    {
+     "id": "postman",
+     "word": "نامه‌رسان"
+    },
+    {
+     "id": "barber",
+     "word": "آرایشگر"
+    },
+    {
+     "id": "tailor",
+     "word": "خیاط"
+    },
+    {
+     "id": "student",
+     "word": "دانش‌آموز"
+    }
+   ]
+  },
+  {
+   "id": "people",
+   "title": "افراد و خانواده",
+   "color": "#C2255C",
+   "cards": [
+    {
+     "id": "father",
+     "word": "پدر"
+    },
+    {
+     "id": "mother",
+     "word": "مادر"
+    },
+    {
+     "id": "grandpa",
+     "word": "پدربزرگ"
+    },
+    {
+     "id": "grandma",
+     "word": "مادربزرگ"
+    },
+    {
+     "id": "boy",
+     "word": "پسر"
+    },
+    {
+     "id": "girl",
+     "word": "دختر"
+    },
+    {
+     "id": "baby",
+     "word": "نوزاد"
+    },
+    {
+     "id": "brother",
+     "word": "برادر"
+    },
+    {
+     "id": "sister",
+     "word": "خواهر"
+    },
+    {
+     "id": "family",
+     "word": "خانواده"
+    },
+    {
+     "id": "friends",
+     "word": "دوستان"
+    },
+    {
+     "id": "teacher_p",
+     "word": "خانم معلم"
+    },
+    {
+     "id": "person",
+     "word": "آدم"
+    },
+    {
+     "id": "wheelchair",
+     "word": "ویلچر"
+    },
+    {
+     "id": "deaf",
+     "word": "سمعک"
+    },
+    {
+     "id": "blind",
+     "word": "نابینا"
+    },
+    {
+     "id": "bearded",
+     "word": "آقای ریش‌دار"
+    }
+   ]
+  },
+  {
+   "id": "animals",
+   "title": "حیوانات",
+   "color": "#E8794A",
+   "cards": [
+    {
+     "id": "dog",
+     "word": "سگ"
+    },
+    {
+     "id": "cat",
+     "word": "گربه"
+    },
+    {
+     "id": "mouse",
+     "word": "موش"
+    },
+    {
+     "id": "rabbit",
+     "word": "خرگوش"
+    },
+    {
+     "id": "fox",
+     "word": "روباه"
+    },
+    {
+     "id": "bear",
+     "word": "خرس"
+    },
+    {
+     "id": "panda",
+     "word": "پاندا"
+    },
+    {
+     "id": "koala",
+     "word": "کوالا"
+    },
+    {
+     "id": "tiger",
+     "word": "ببر"
+    },
+    {
+     "id": "lion",
+     "word": "شیر"
+    },
+    {
+     "id": "cow",
+     "word": "گاو"
+    },
+    {
+     "id": "horse",
+     "word": "اسب"
+    },
+    {
+     "id": "sheep",
+     "word": "گوسفند"
+    },
+    {
+     "id": "goat",
+     "word": "بز"
+    },
+    {
+     "id": "camel",
+     "word": "شتر"
+    },
+    {
+     "id": "elephant",
+     "word": "فیل"
+    },
+    {
+     "id": "giraffe",
+     "word": "زرافه"
+    },
+    {
+     "id": "zebra",
+     "word": "گورخر"
+    },
+    {
+     "id": "monkey",
+     "word": "میمون"
+    },
+    {
+     "id": "gorilla",
+     "word": "گوریل"
+    },
+    {
+     "id": "wolf",
+     "word": "گرگ"
+    },
+    {
+     "id": "deer",
+     "word": "گوزن"
+    },
+    {
+     "id": "squirrel",
+     "word": "سنجاب"
+    },
+    {
+     "id": "hedgehog",
+     "word": "جوجه‌تیغی"
+    },
+    {
+     "id": "kangaroo",
+     "word": "کانگورو"
+    },
+    {
+     "id": "hippo",
+     "word": "اسب آبی"
+    },
+    {
+     "id": "rhino",
+     "word": "کرگدن"
+    },
+    {
+     "id": "crocodile",
+     "word": "تمساح"
+    },
+    {
+     "id": "turtle",
+     "word": "لاک‌پشت"
+    },
+    {
+     "id": "snake",
+     "word": "مار"
+    },
+    {
+     "id": "frog",
+     "word": "قورباغه"
+    },
+    {
+     "id": "chicken",
+     "word": "مرغ"
+    },
+    {
+     "id": "rooster",
+     "word": "خروس"
+    },
+    {
+     "id": "chick",
+     "word": "جوجه"
+    },
+    {
+     "id": "duck",
+     "word": "اردک"
+    },
+    {
+     "id": "bird",
+     "word": "گنجشک"
+    },
+    {
+     "id": "parrot",
+     "word": "طوطی"
+    },
+    {
+     "id": "owl",
+     "word": "جغد"
+    },
+    {
+     "id": "eagle",
+     "word": "عقاب"
+    },
+    {
+     "id": "peacock",
+     "word": "طاووس"
+    },
+    {
+     "id": "penguin",
+     "word": "پنگوئن"
+    },
+    {
+     "id": "fish",
+     "word": "ماهی"
+    },
+    {
+     "id": "dolphin",
+     "word": "دلفین"
+    },
+    {
+     "id": "whale",
+     "word": "نهنگ"
+    },
+    {
+     "id": "shark",
+     "word": "کوسه"
+    },
+    {
+     "id": "octopus",
+     "word": "هشت‌پا"
+    },
+    {
+     "id": "crab",
+     "word": "خرچنگ"
+    },
+    {
+     "id": "bee",
+     "word": "زنبور"
+    },
+    {
+     "id": "butterfly",
+     "word": "پروانه"
+    },
+    {
+     "id": "ladybug",
+     "word": "کفشدوزک"
+    },
+    {
+     "id": "snail",
+     "word": "حلزون"
+    },
+    {
+     "id": "ant",
+     "word": "مورچه"
+    },
+    {
+     "id": "spider",
+     "word": "عنکبوت"
+    }
+   ]
+  },
+  {
+   "id": "objects",
+   "title": "اشیا",
+   "color": "#7048E8",
+   "cards": [
+    {
+     "id": "ball",
+     "word": "توپ"
+    },
+    {
+     "id": "book",
+     "word": "کتاب"
+    },
+    {
+     "id": "pencil",
+     "word": "مداد"
+    },
+    {
+     "id": "crayon",
+     "word": "مداد رنگی"
+    },
+    {
+     "id": "scissors",
+     "word": "قیچی"
+    },
+    {
+     "id": "ruler",
+     "word": "خط‌کش"
+    },
+    {
+     "id": "backpack",
+     "word": "کیف مدرسه"
+    },
+    {
+     "id": "clock",
+     "word": "ساعت"
+    },
+    {
+     "id": "watch",
+     "word": "ساعت مچی"
+    },
+    {
+     "id": "phone",
+     "word": "گوشی"
+    },
+    {
+     "id": "key",
+     "word": "کلید"
+    },
+    {
+     "id": "chair",
+     "word": "صندلی"
+    },
+    {
+     "id": "table",
+     "word": "میز"
+    },
+    {
+     "id": "bed",
+     "word": "تخت"
+    },
+    {
+     "id": "pillow",
+     "word": "بالش"
+    },
+    {
+     "id": "blanket",
+     "word": "پتو"
+    },
+    {
+     "id": "door",
+     "word": "در"
+    },
+    {
+     "id": "window",
+     "word": "پنجره"
+    },
+    {
+     "id": "glasses",
+     "word": "عینک"
+    },
+    {
+     "id": "umbrella",
+     "word": "چتر"
+    },
+    {
+     "id": "toothbrush",
+     "word": "مسواک"
+    },
+    {
+     "id": "soap",
+     "word": "صابون"
+    },
+    {
+     "id": "towel",
+     "word": "حوله"
+    },
+    {
+     "id": "comb",
+     "word": "شانه"
+    },
+    {
+     "id": "cup",
+     "word": "لیوان"
+    },
+    {
+     "id": "spoon",
+     "word": "قاشق"
+    },
+    {
+     "id": "fork",
+     "word": "چنگال"
+    },
+    {
+     "id": "plate",
+     "word": "بشقاب"
+    },
+    {
+     "id": "bulb",
+     "word": "لامپ"
+    },
+    {
+     "id": "tv",
+     "word": "تلویزیون"
+    },
+    {
+     "id": "laptop",
+     "word": "رایانه"
+    },
+    {
+     "id": "gift",
+     "word": "هدیه"
+    },
+    {
+     "id": "balloon",
+     "word": "بادکنک"
+    },
+    {
+     "id": "teddy",
+     "word": "عروسک خرسی"
+    },
+    {
+     "id": "broom",
+     "word": "جارو"
+    },
+    {
+     "id": "bin",
+     "word": "سطل زباله"
+    },
+    {
+     "id": "mirror",
+     "word": "آینه"
+    },
+    {
+     "id": "puzzle",
+     "word": "پازل"
+    },
+    {
+     "id": "hammer",
+     "word": "چکش"
+    },
+    {
+     "id": "candle",
+     "word": "شمع"
+    },
+    {
+     "id": "box",
+     "word": "جعبه"
+    },
+    {
+     "id": "letter",
+     "word": "نامه"
+    },
+    {
+     "id": "brush",
+     "word": "قلم‌مو"
+    },
+    {
+     "id": "camera",
+     "word": "دوربین"
+    },
+    {
+     "id": "headphone",
+     "word": "هدفون"
+    },
+    {
+     "id": "cart",
+     "word": "سبد خرید"
+    },
+    {
+     "id": "bathtub",
+     "word": "وان حمام"
+    },
+    {
+     "id": "toilet",
+     "word": "توالت"
+    },
+    {
+     "id": "shower",
+     "word": "دوش"
+    },
+    {
+     "id": "house",
+     "word": "خانه"
+    },
+    {
+     "id": "tree",
+     "word": "درخت"
+    },
+    {
+     "id": "flower",
+     "word": "گل"
+    },
+    {
+     "id": "sun",
+     "word": "خورشید"
+    },
+    {
+     "id": "moon",
+     "word": "ماه"
+    },
+    {
+     "id": "star",
+     "word": "ستاره"
+    },
+    {
+     "id": "cloud",
+     "word": "ابر"
+    },
+    {
+     "id": "rain",
+     "word": "باران"
+    },
+    {
+     "id": "snow",
+     "word": "برف"
+    },
+    {
+     "id": "fire",
+     "word": "آتش"
+    }
+   ]
+  },
+  {
+   "id": "food",
+   "title": "خوراکی‌ها",
+   "color": "#F08C00",
+   "cards": [
+    {
+     "id": "apple",
+     "word": "سیب"
+    },
+    {
+     "id": "banana",
+     "word": "موز"
+    },
+    {
+     "id": "orange",
+     "word": "پرتقال"
+    },
+    {
+     "id": "grapes",
+     "word": "انگور"
+    },
+    {
+     "id": "watermelon",
+     "word": "هندوانه"
+    },
+    {
+     "id": "strawberry",
+     "word": "توت‌فرنگی"
+    },
+    {
+     "id": "cherries",
+     "word": "گیلاس"
+    },
+    {
+     "id": "peach",
+     "word": "هلو"
+    },
+    {
+     "id": "pear",
+     "word": "گلابی"
+    },
+    {
+     "id": "lemon",
+     "word": "لیمو"
+    },
+    {
+     "id": "pineapple",
+     "word": "آناناس"
+    },
+    {
+     "id": "pomegranate",
+     "word": "انار"
+    },
+    {
+     "id": "dates",
+     "word": "خرما"
+    },
+    {
+     "id": "carrot",
+     "word": "هویج"
+    },
+    {
+     "id": "tomato",
+     "word": "گوجه‌فرنگی"
+    },
+    {
+     "id": "cucumber",
+     "word": "خیار"
+    },
+    {
+     "id": "potato",
+     "word": "سیب‌زمینی"
+    },
+    {
+     "id": "corn",
+     "word": "ذرت"
+    },
+    {
+     "id": "onion",
+     "word": "پیاز"
+    },
+    {
+     "id": "pepper",
+     "word": "فلفل دلمه‌ای"
+    },
+    {
+     "id": "lettuce",
+     "word": "کاهو"
+    },
+    {
+     "id": "mushroom",
+     "word": "قارچ"
+    },
+    {
+     "id": "bread",
+     "word": "نان"
+    },
+    {
+     "id": "cheese",
+     "word": "پنیر"
+    },
+    {
+     "id": "egg",
+     "word": "تخم‌مرغ"
+    },
+    {
+     "id": "milk",
+     "word": "شیر"
+    },
+    {
+     "id": "water",
+     "word": "آب"
+    },
+    {
+     "id": "juice",
+     "word": "آبمیوه"
+    },
+    {
+     "id": "yogurt",
+     "word": "ماست"
+    },
+    {
+     "id": "rice",
+     "word": "برنج"
+    },
+    {
+     "id": "kebab",
+     "word": "کباب"
+    },
+    {
+     "id": "soup",
+     "word": "سوپ"
+    },
+    {
+     "id": "chicken_leg",
+     "word": "مرغ"
+    },
+    {
+     "id": "tea",
+     "word": "چای"
+    },
+    {
+     "id": "honey",
+     "word": "عسل"
+    },
+    {
+     "id": "cake",
+     "word": "کیک"
+    },
+    {
+     "id": "icecream",
+     "word": "بستنی"
+    },
+    {
+     "id": "chocolate",
+     "word": "شکلات"
+    },
+    {
+     "id": "candy",
+     "word": "آبنبات"
+    },
+    {
+     "id": "cookie",
+     "word": "بیسکویت"
+    },
+    {
+     "id": "pizza",
+     "word": "پیتزا"
+    },
+    {
+     "id": "sandwich",
+     "word": "ساندویچ"
+    }
+   ]
+  },
+  {
+   "id": "vehicles",
+   "title": "وسایل نقلیه",
+   "color": "#1971C2",
+   "cards": [
+    {
+     "id": "car",
+     "word": "ماشین"
+    },
+    {
+     "id": "bus",
+     "word": "اتوبوس"
+    },
+    {
+     "id": "taxi",
+     "word": "تاکسی"
+    },
+    {
+     "id": "ambulance",
+     "word": "آمبولانس"
+    },
+    {
+     "id": "firetruck",
+     "word": "ماشین آتش‌نشانی"
+    },
+    {
+     "id": "policecar",
+     "word": "ماشین پلیس"
+    },
+    {
+     "id": "truck",
+     "word": "کامیون"
+    },
+    {
+     "id": "tractor",
+     "word": "تراکتور"
+    },
+    {
+     "id": "train",
+     "word": "قطار"
+    },
+    {
+     "id": "metro",
+     "word": "مترو"
+    },
+    {
+     "id": "airplane",
+     "word": "هواپیما"
+    },
+    {
+     "id": "helicopter",
+     "word": "هلی‌کوپتر"
+    },
+    {
+     "id": "ship",
+     "word": "کشتی"
+    },
+    {
+     "id": "sailboat",
+     "word": "قایق"
+    },
+    {
+     "id": "bicycle",
+     "word": "دوچرخه"
+    },
+    {
+     "id": "motorcycle",
+     "word": "موتورسیکلت"
+    },
+    {
+     "id": "scooter",
+     "word": "اسکوتر"
+    },
+    {
+     "id": "rocket",
+     "word": "موشک"
+    }
+   ]
+  },
+  {
+   "id": "clothes",
+   "title": "پوشاک",
+   "color": "#2B8A3E",
+   "cards": [
+    {
+     "id": "tshirt",
+     "word": "تی‌شرت"
+    },
+    {
+     "id": "jeans",
+     "word": "شلوار"
+    },
+    {
+     "id": "dress",
+     "word": "پیراهن"
+    },
+    {
+     "id": "socks",
+     "word": "جوراب"
+    },
+    {
+     "id": "sneaker",
+     "word": "کفش ورزشی"
+    },
+    {
+     "id": "shoe",
+     "word": "کفش"
+    },
+    {
+     "id": "boot",
+     "word": "چکمه"
+    },
+    {
+     "id": "cap",
+     "word": "کلاه کپ"
+    },
+    {
+     "id": "hat",
+     "word": "کلاه بافتنی"
+    },
+    {
+     "id": "gloves",
+     "word": "دستکش"
+    },
+    {
+     "id": "scarf",
+     "word": "شال‌گردن"
+    },
+    {
+     "id": "coat",
+     "word": "کاپشن"
+    },
+    {
+     "id": "headscarf",
+     "word": "روسری"
+    },
+    {
+     "id": "pajamas",
+     "word": "لباس خواب"
+    },
+    {
+     "id": "sunglasses",
+     "word": "عینک آفتابی"
+    },
+    {
+     "id": "sandal",
+     "word": "دمپایی"
+    },
+    {
+     "id": "shorts",
+     "word": "شلوارک"
+    }
+   ]
+  },
+  {
+   "id": "body",
+   "title": "اعضای بدن",
+   "color": "#AE3EC9",
+   "cards": [
+    {
+     "id": "head",
+     "word": "سر"
+    },
+    {
+     "id": "hair",
+     "word": "مو"
+    },
+    {
+     "id": "eye",
+     "word": "چشم"
+    },
+    {
+     "id": "ear",
+     "word": "گوش"
+    },
+    {
+     "id": "nose",
+     "word": "بینی"
+    },
+    {
+     "id": "mouth",
+     "word": "دهان"
+    },
+    {
+     "id": "tongue",
+     "word": "زبان"
+    },
+    {
+     "id": "tooth",
+     "word": "دندان"
+    },
+    {
+     "id": "hand",
+     "word": "دست"
+    },
+    {
+     "id": "finger",
+     "word": "انگشت"
+    },
+    {
+     "id": "arm",
+     "word": "بازو"
+    },
+    {
+     "id": "belly",
+     "word": "شکم"
+    },
+    {
+     "id": "leg",
+     "word": "پا"
+    },
+    {
+     "id": "knee",
+     "word": "زانو"
+    },
+    {
+     "id": "foot",
+     "word": "کف پا"
+    }
+   ]
+  },
+  {
+   "id": "colors",
+   "title": "رنگ‌ها و شکل‌ها",
+   "color": "#495057",
+   "cards": [
+    {
+     "id": "red",
+     "word": "قرمز"
+    },
+    {
+     "id": "orange_c",
+     "word": "نارنجی"
+    },
+    {
+     "id": "yellow",
+     "word": "زرد"
+    },
+    {
+     "id": "green",
+     "word": "سبز"
+    },
+    {
+     "id": "blue",
+     "word": "آبی"
+    },
+    {
+     "id": "purple",
+     "word": "بنفش"
+    },
+    {
+     "id": "pink",
+     "word": "صورتی"
+    },
+    {
+     "id": "brown",
+     "word": "قهوه‌ای"
+    },
+    {
+     "id": "gray",
+     "word": "خاکستری"
+    },
+    {
+     "id": "black",
+     "word": "سیاه"
+    },
+    {
+     "id": "white",
+     "word": "سفید"
+    },
+    {
+     "id": "circle",
+     "word": "دایره"
+    },
+    {
+     "id": "square",
+     "word": "مربع"
+    },
+    {
+     "id": "triangle",
+     "word": "مثلث"
+    },
+    {
+     "id": "rectangle",
+     "word": "مستطیل"
+    },
+    {
+     "id": "heart_s",
+     "word": "قلب"
+    },
+    {
+     "id": "star_s",
+     "word": "ستاره"
+    }
+   ]
+  },
+  {
+   "id": "numbers",
+   "title": "اعداد",
+   "color": "#0B7285",
+   "cards": [
+    {
+     "id": "n0",
+     "word": "صفر"
+    },
+    {
+     "id": "n1",
+     "word": "یک"
+    },
+    {
+     "id": "n2",
+     "word": "دو"
+    },
+    {
+     "id": "n3",
+     "word": "سه"
+    },
+    {
+     "id": "n4",
+     "word": "چهار"
+    },
+    {
+     "id": "n5",
+     "word": "پنج"
+    },
+    {
+     "id": "n6",
+     "word": "شش"
+    },
+    {
+     "id": "n7",
+     "word": "هفت"
+    },
+    {
+     "id": "n8",
+     "word": "هشت"
+    },
+    {
+     "id": "n9",
+     "word": "نه"
+    },
+    {
+     "id": "n10",
+     "word": "ده"
+    }
+   ]
+  }
+ ]
+}

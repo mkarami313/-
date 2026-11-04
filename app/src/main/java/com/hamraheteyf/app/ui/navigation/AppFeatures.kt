@@ -190,7 +190,7 @@ object AppFeatures {
                 onStories = { nav.navigate(Routes.TOOLS_STORIES) }, onAac = { nav.navigate(Routes.TOOLS_AAC) },
                 onLog = { nav.navigate(Routes.TOOLS_LOG) }, onEmergency = { nav.navigate(Routes.TOOLS_EMERGENCY) }, onReward = { nav.navigate(Routes.TOOLS_REWARD) },
                 onFirstThen = { nav.navigate(Routes.TOOLS_FIRSTTHEN) }, onTimer = { nav.navigate(Routes.TOOLS_TIMER) },
-                onMilestones = { nav.navigate(Routes.TOOLS_MILESTONES) })
+                onMilestones = { nav.navigate(Routes.TOOLS_MILESTONES) }, onCards = { nav.navigate(Routes.CARDS) })
         }
         composable(Routes.TOOLS_SCHEDULE) { ScheduleScreen(onBack = { nav.popBackStack() }) }
         composable(Routes.TOOLS_STORIES) { StoriesScreen(onBack = { nav.popBackStack() }) }
@@ -201,6 +201,17 @@ object AppFeatures {
         composable(Routes.TOOLS_FIRSTTHEN) { FirstThenScreen(onBack = { nav.popBackStack() }) }
         composable(Routes.TOOLS_TIMER) { VisualTimerScreen(onBack = { nav.popBackStack() }) }
         composable(Routes.TOOLS_MILESTONES) { MilestonesScreen(onBack = { nav.popBackStack() }) }
+    }
+
+    /** «کارت‌های آموزشی»: picture cards bundled in the app (offline), game and printable PDF. */
+    private val cards = AppFeature("cards", "کارت‌های آموزشی", Icons.Outlined.Style, Routes.CARDS, order = 37, homeTile = true) { nav ->
+        composable(Routes.CARDS) {
+            CardsHubScreen(onBack = { nav.popBackStack() }, onOpen = { nav.navigate(Routes.cardsCategory(it)) },
+                onGame = { nav.navigate(Routes.CARDS_GAME) }, onPrint = { nav.navigate(Routes.CARDS_PRINT) })
+        }
+        composable(Routes.CARDS_CATEGORY) { e -> CardsCategoryScreen(e.arguments?.getString("category").orEmpty(), onBack = { nav.popBackStack() }) }
+        composable(Routes.CARDS_GAME) { CardsGameScreen(onBack = { nav.popBackStack() }) }
+        composable(Routes.CARDS_PRINT) { CardsPrintScreen(onBack = { nav.popBackStack() }) }
     }
 
     private val courses = AppFeature("courses", "دوره‌ها", Icons.Outlined.School, Routes.COURSES, order = 39, homeTile = true) { nav ->
@@ -266,7 +277,7 @@ object AppFeatures {
     }
 
     /** Add new modules here. */
-    val all: List<AppFeature> = listOf(home, forum, groups, learn, messages, donations, childfile, booking, tools, courses, places, directory, profile).sortedBy { it.order }
+    val all: List<AppFeature> = listOf(home, forum, groups, learn, messages, donations, childfile, booking, cards, tools, courses, places, directory, profile).sortedBy { it.order }
     val bottomTabs: List<AppFeature> = all.filter { it.bottomTab }
 
     /** Modules currently enabled by the server (core ones are never disabled). */

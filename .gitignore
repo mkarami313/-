@@ -17,3 +17,4 @@ keystore.properties
 local.properties
 __pycache__/
 .kotlin/
+tools/cards/.cache/

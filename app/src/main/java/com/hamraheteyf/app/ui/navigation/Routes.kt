@@ -94,6 +94,11 @@ object Routes {
     fun learnSubmit(id: String? = null) = "learn_submit?id=${id.orEmpty()}"
     const val LEARN_REVIEW = "learn_review"
     const val TOOLS_MILESTONES = "tools_milestones"
+    const val CARDS = "cards"
+    const val CARDS_CATEGORY = "cards/{category}"
+    fun cardsCategory(id: String) = "cards/$id"
+    const val CARDS_GAME = "cards_game"
+    const val CARDS_PRINT = "cards_print"
 
     /** Where a notification leads. relatedId is a topic id (t_…), conversation (conv_…), group (g_…),
      *  learning item ("learn:l_…"), verification or user id. */

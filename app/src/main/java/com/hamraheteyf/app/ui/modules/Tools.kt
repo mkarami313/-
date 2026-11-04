@@ -45,9 +45,11 @@ fun ToolsHubScreen(
     onBack: () -> Unit, onSchedule: () -> Unit, onStories: () -> Unit, onAac: () -> Unit,
     onLog: () -> Unit = {}, onEmergency: () -> Unit = {}, onReward: () -> Unit = {}, onFirstThen: () -> Unit = {}, onTimer: () -> Unit = {},
     onMilestones: () -> Unit = {},
+    onCards: () -> Unit = {},
 ) {
     Scaffold(topBar = { ScreenHeader("ابزارهای روزانه", onBack = onBack) }) { pad ->
         Column(Modifier.padding(pad).verticalScroll(rememberScrollState()).padding(12.dp).fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            HubTile("کارت‌های آموزشی", "صدها کارتِ تصویری (فعل، احساس، حیوان، شغل…) با صدا، بازی و چاپ", Icons.Outlined.Style, onCards)
             HubTile("ثبت رفتار و خواب", "ثبت سریع رفتار، خواب و خلق‌وخو با آمار ۳۰ روزه", Icons.Outlined.Insights, onLog)
             HubTile("کارت اضطراری کودک", "اطلاعات تماس و نکات مهم برای گم‌شدن یا شرایط اضطراری", Icons.Outlined.Emergency, onEmergency)
             HubTile("برنامهٔ تصویری", "فهرست مراحل روز (مسواک، لباس، مدرسه…) با تیک‌زدن و پیشرفت روزانه", Icons.Outlined.ChecklistRtl, onSchedule)
