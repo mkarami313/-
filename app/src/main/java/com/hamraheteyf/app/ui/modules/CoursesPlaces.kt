@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -160,6 +161,16 @@ fun PlacesScreen(onBack: () -> Unit) {
     val admin = me?.isAdmin == true
     fun open(i: Intent) { runCatching { ctx.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } }
     val shown = st.items?.filter { city.isBlank() || it["city"].contains(city.trim()) }
+    // Ratings & reviews of centers (server reviews, target = the place record id).
+    val community = com.hamraheteyf.app.community.rememberCommunity()
+    var reviewing by remember { mutableStateOf<Rec?>(null) }
+    var ratingTick by remember { mutableIntStateOf(0) }
+    val placeIds = if (tab == 0) st.items.orEmpty().map { it.id } else emptyList()
+    val ratings by produceState(emptyMap<String, com.hamraheteyf.app.community.RatingSummary>(), community, placeIds, ratingTick) {
+        if (community != null && placeIds.isNotEmpty()) {
+            (community.ratingSummary("place", placeIds) as? com.hamraheteyf.app.net.ApiResult.Ok)?.let { value = it.data }
+        }
+    }
     Scaffold(topBar = { ScreenHeader("مراکز و رویدادها", onBack = onBack) },
         floatingActionButton = { if (admin) AddFab(if (tab == 0) "مرکز جدید" else "رویداد جدید") { adding = true } }) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
@@ -168,10 +179,11 @@ fun PlacesScreen(onBack: () -> Unit) {
             }
             OutlinedTextField(city, { city = it }, label = { Text("فیلتر شهر") }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(12.dp, 8.dp))
             RecListBody(RecState(shown, st.error), if (st.items?.isNotEmpty() == true) "موردی برای این شهر نیست." else "هنوز موردی ثبت نشده است.", { tick++ }) { r ->
-                CompactCard {
+                CompactCard(onClick = if (tab == 0) { { reviewing = r } } else null) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(if (tab == 0) r["name"] else r["title"], style = MaterialTheme.typography.titleSmall)
+                            if (tab == 0) RatingInline(ratings[r.id])
                             Text(listOf(if (tab == 0) r["type"] else r["date"], r["city"]).filter { it.isNotBlank() }.joinToString(" · "), style = MaterialTheme.typography.labelMedium, color = mutedColor())
                             if (r["address"].isNotBlank()) Text(r["address"], style = MaterialTheme.typography.bodySmall)
                             val desc = if (tab == 0) r["note"] else r["description"]
@@ -183,6 +195,7 @@ fun PlacesScreen(onBack: () -> Unit) {
                         if (r["phone"].isNotBlank()) TextButton(onClick = { open(Intent(Intent.ACTION_DIAL, Uri.parse("tel:${r["phone"]}"))) }) { Icon(Icons.Outlined.Call, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("تماس") }
                         val q = if (r["lat"].isNotBlank() && r["lng"].isNotBlank()) "${r["lat"]},${r["lng"]}" else r["address"].ifBlank { "" }
                         if (q.isNotBlank()) TextButton(onClick = { open(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=" + Uri.encode(q)))) }) { Icon(Icons.Outlined.Directions, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("مسیریابی") }
+                        if (tab == 0) TextButton(onClick = { reviewing = r }) { Icon(Icons.Outlined.StarOutline, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("نظرها") }
                         if (r["link"].startsWith("http")) TextButton(onClick = { open(Intent(Intent.ACTION_VIEW, Uri.parse(r["link"]))) }) { Icon(Icons.Outlined.OpenInNew, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("اطلاعات بیشتر") }
                     }
                 }
@@ -192,5 +205,23 @@ fun PlacesScreen(onBack: () -> Unit) {
     if ((adding || editing != null) && client != null) {
         RecFormDialog(client, kind, "ثبت", if (tab == 0) PlaceFields else EventFields, editing, { adding = false; editing = null }, { adding = false; editing = null; tick++ })
     }
+    reviewing?.let { r -> PlaceReviewsSheet(r, onDismiss = { reviewing = null; ratingTick++ }) }
     deleting?.let { d -> ConfirmDialog("حذف شود؟", onYes = { deleting = null; scope.launch { client?.delete(kind, d.id); tick++ } }, onDismiss = { deleting = null }) }
+}
+
+/** Bottom sheet with a center's details summary and its ratings & reviews. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PlaceReviewsSheet(r: Rec, onDismiss: () -> Unit) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(Modifier.fillMaxWidth().verticalScroll(androidx.compose.foundation.rememberScrollState()).padding(horizontal = 12.dp).padding(bottom = 24.dp)) {
+            Text(r["name"], style = MaterialTheme.typography.titleLarge)
+            val meta = listOf(r["type"], r["city"]).filter { it.isNotBlank() }.joinToString(" · ")
+            if (meta.isNotBlank()) Text(meta, style = MaterialTheme.typography.labelMedium, color = mutedColor())
+            if (r["address"].isNotBlank()) Text(r["address"], style = MaterialTheme.typography.bodySmall)
+            Spacer(Modifier.height(8.dp))
+            HorizontalDivider()
+            ReviewsSection("place", r.id, canReview = true)
+        }
+    }
 }
