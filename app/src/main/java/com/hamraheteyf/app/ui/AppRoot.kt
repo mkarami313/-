@@ -1,6 +1,20 @@
 package com.hamraheteyf.app.ui
 
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Forum
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Mail
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PlayCircle
+import androidx.compose.material.icons.outlined.Forum
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Mail
+import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -10,15 +24,21 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.hamraheteyf.app.di.LocalAppContainer
+import com.hamraheteyf.app.push.PendingDeepLink
 import com.hamraheteyf.app.ui.auth.LoginScreen
 import com.hamraheteyf.app.ui.auth.RegisterScreen
 import com.hamraheteyf.app.ui.auth.ResetPasswordScreen
+import com.hamraheteyf.app.ui.common.toPersianDigits
+import com.hamraheteyf.app.ui.messages.rememberUnreadConversationCount
 import com.hamraheteyf.app.ui.onboarding.OnboardingPrefs
 import com.hamraheteyf.app.ui.modules.EmergencyCardPublicScreen
 import com.hamraheteyf.app.ui.navigation.AppFeatures
@@ -60,36 +80,85 @@ private fun MainNavHost() {
     val ctx = LocalContext.current
     val uid by LocalAppContainer.current.authRepository.currentUserId.collectAsState()
     val start = remember(uid) { if (uid != null && !OnboardingPrefs.isDone(ctx, uid!!)) Routes.ONBOARDING else Routes.HOME }
+    val unreadConversations by rememberUnreadConversationCount()
 
     // «من متخصص هستم» chosen at sign-up / onboarding: continue straight into verification once on Home.
     LaunchedEffect(currentRoute) {
         if (currentRoute == Routes.HOME && OnboardingPrefs.takePendingPro(ctx)) nav.navigate(Routes.VERIFICATION)
     }
 
+    // A tapped system notification: open its target once the graph is up (and onboarding is done).
+    val deepLink by PendingDeepLink.target.collectAsState()
+    LaunchedEffect(deepLink, currentRoute) {
+        val t = deepLink ?: return@LaunchedEffect
+        if (currentRoute == null || currentRoute == Routes.ONBOARDING) return@LaunchedEffect
+        PendingDeepLink.consume()
+        val route = Routes.forNotification(t.type, t.relatedId) ?: Routes.NOTIFICATIONS
+        runCatching { nav.navigate(route) { launchSingleTop = true } }
+    }
+
     Scaffold(
+        // Screens own their insets (their top bars pad the status bar); the shell only reserves the tab bar.
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         bottomBar = {
             if (currentRoute in tabs.map { it.entryRoute }) {
-                NavigationBar {
-                    tabs.forEach { f ->
-                        NavigationBarItem(
-                            selected = currentRoute == f.entryRoute,
-                            onClick = {
-                                nav.navigate(f.entryRoute) {
-                                    popUpTo(nav.graph.findStartDestination().id) { saveState = true }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
-                            },
-                            icon = { Icon(f.icon, contentDescription = f.title) },
-                            label = { Text(f.title, maxLines = 1, softWrap = false, style = MaterialTheme.typography.labelSmall) },
-                        )
+                Column {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
+                        tabs.forEach { f ->
+                            val selected = currentRoute == f.entryRoute
+                            NavigationBarItem(
+                                selected = selected,
+                                onClick = {
+                                    nav.navigate(f.entryRoute) {
+                                        popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+                                        launchSingleTop = true
+                                        restoreState = true
+                                    }
+                                },
+                                icon = {
+                                    val icon = tabIcon(f.id, selected) ?: f.icon
+                                    if (f.id == "messages" && unreadConversations > 0) {
+                                        BadgedBox(badge = {
+                                            Badge { Text(if (unreadConversations > 99) "۹۹+" else unreadConversations.toPersianDigits()) }
+                                        }) { Icon(icon, contentDescription = f.title) }
+                                    } else {
+                                        Icon(icon, contentDescription = f.title)
+                                    }
+                                },
+                                label = {
+                                    Text(
+                                        f.title, maxLines = 1, softWrap = false,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                    )
+                                },
+                                colors = NavigationBarItemDefaults.colors(
+                                    selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    selectedTextColor = MaterialTheme.colorScheme.primary,
+                                    indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+                                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                ),
+                            )
+                        }
                     }
                 }
             }
         },
     ) { padding ->
-        NavHost(nav, startDestination = start, modifier = Modifier.padding(padding)) {
+        NavHost(nav, startDestination = start, modifier = Modifier.padding(padding).consumeWindowInsets(padding)) {
             AppFeatures.all.forEach { f -> f.routes(this, nav) }
         }
     }
+}
+
+/** Filled icon for the selected tab, outlined otherwise; null → the feature's own icon. */
+private fun tabIcon(id: String, selected: Boolean): ImageVector? = when (id) {
+    "home" -> if (selected) Icons.Filled.Home else Icons.Outlined.Home
+    "qa" -> if (selected) Icons.Filled.Forum else Icons.Outlined.Forum
+    "guides" -> if (selected) Icons.Filled.PlayCircle else Icons.Outlined.PlayCircle
+    "messages" -> if (selected) Icons.Filled.Mail else Icons.Outlined.Mail
+    "profile" -> if (selected) Icons.Filled.Person else Icons.Outlined.Person
+    else -> null
 }

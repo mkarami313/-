@@ -35,14 +35,19 @@ object PushNotifier {
     }
 
     /** Shows a notification unless [notifId] was already shown on this device. */
-    fun show(context: Context, notifId: String, title: String, body: String) {
+    fun show(context: Context, notifId: String, title: String, body: String, type: String? = null, relatedId: String? = null) {
         if (notifId.isBlank()) return
         if (!markShown(context, notifId)) return  // already shown → skip (dedup)
 
         ensureChannel(context)
+        // Tapping opens the app at the notification's target (see PendingDeepLink). The request code is
+        // per notification so two notifications never share (and overwrite) each other's extras.
+        val open = Intent(context, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        if (!type.isNullOrBlank()) open.putExtra(PendingDeepLink.EXTRA_TYPE, type)
+        if (!relatedId.isNullOrBlank()) open.putExtra(PendingDeepLink.EXTRA_RELATED, relatedId)
         val tap = PendingIntent.getActivity(
-            context, 0,
-            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            context, notifId.hashCode(), open,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
@@ -65,7 +70,7 @@ object PushNotifier {
     /** Records [notifId] as shown; returns false if it was already present. */
     private fun markShown(context: Context, notifId: String): Boolean {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val shown = prefs.getStringSet(KEY_SHOWN, emptySet())!!.toMutableSet()
+        val shown = prefs.getStringSet(KEY_SHOWN, emptySet()).orEmpty().toMutableSet()
         if (notifId in shown) return false
         shown.add(notifId)
         // Bound the set so it can't grow forever.

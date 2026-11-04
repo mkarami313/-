@@ -44,9 +44,15 @@ fun RegisterScreen(onBack: () -> Unit) {
         Column(
             Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
         ) {
+            Spacer(Modifier.height(20.dp))
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { com.hamraheteyf.app.ui.kit.Wordmark(size = 40.dp) }
             Spacer(Modifier.height(8.dp))
-            InfoBanner("برای شروع فقط چند اطلاعات ساده لازم است.")
-            Spacer(Modifier.height(16.dp))
+            Text(
+                "برای شروع فقط چند اطلاعاتِ ساده لازم است.",
+                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center, modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(20.dp))
 
             OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("نام نمایشی") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             Spacer(Modifier.height(12.dp))

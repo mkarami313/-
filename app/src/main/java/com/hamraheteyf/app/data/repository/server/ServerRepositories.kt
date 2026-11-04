@@ -279,6 +279,10 @@ class ServerConversationRepository(private val store: ServerStore) : Conversatio
 
     override suspend fun sendMessage(conversationId: String, body: String) =
         store.actUnit("sendMessage", argsJson("conversationId" to conversationId, "body" to body))
+
+    /** Records that I have seen [conversationId] up to now (drives unread counts on both sides). */
+    suspend fun markConversationRead(conversationId: String) =
+        store.actUnit("conversationRead", argsJson("conversationId" to conversationId))
 }
 
 // ------------------------------------------------------------------------- Guides

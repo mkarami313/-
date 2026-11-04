@@ -1,5 +1,6 @@
 package com.hamraheteyf.app.ui.auth
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -73,18 +74,21 @@ fun LoginScreen(onGoToRegister: () -> Unit, onGoToReset: (String) -> Unit = {}, 
     }
 
     Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
+        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).systemBarsPadding().imePadding()
+            .verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Spacer(Modifier.height(32.dp))
-        Text("همراهِ طیف", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(40.dp))
+        com.hamraheteyf.app.ui.kit.Wordmark(size = 48.dp)
+        Spacer(Modifier.height(12.dp))
         Text(
             "فضایی محترمانه و رایگان برای خانواده‌ها و متخصصان",
             style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(Modifier.height(32.dp))
+        Spacer(Modifier.height(28.dp))
+        Text("ورود به حساب", style = MaterialTheme.typography.titleMedium, modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(12.dp))
 
         OutlinedTextField(
             value = email, onValueChange = { email = it }, label = { Text("ایمیل") },

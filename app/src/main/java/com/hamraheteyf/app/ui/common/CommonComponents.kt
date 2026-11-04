@@ -121,9 +121,9 @@ private fun DismissibleBanner(
     if (!visible) return
     Surface(color = container, shape = MaterialTheme.shapes.medium, modifier = modifier.fillMaxWidth()) {
         Row(Modifier.padding(start = 12.dp), verticalAlignment = Alignment.Top) {
-            Icon(icon, contentDescription = null, tint = content, modifier = Modifier.padding(vertical = 12.dp).size(20.dp))
+            Icon(icon, contentDescription = null, tint = content, modifier = Modifier.padding(vertical = 10.dp).size(18.dp))
             Spacer(Modifier.width(8.dp))
-            Text(text, style = MaterialTheme.typography.bodyMedium, color = content, modifier = Modifier.weight(1f).padding(vertical = 12.dp))
+            Text(text, style = MaterialTheme.typography.bodySmall, color = content, modifier = Modifier.weight(1f).padding(vertical = 10.dp))
             if (dismissKey != null) {
                 IconButton(
                     onClick = { DismissedNotices.dismiss(context, dismissKey); visible = false },
@@ -231,13 +231,13 @@ fun EmptyState(message: String, modifier: Modifier = Modifier) {
     ) {
         Box(
             Modifier.size(72.dp)
-                .background(MaterialTheme.colorScheme.surfaceVariant, androidx.compose.foundation.shape.CircleShape),
+                .background(MaterialTheme.colorScheme.primaryContainer, androidx.compose.foundation.shape.CircleShape),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 Icons.Outlined.Inbox,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+                tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(34.dp),
             )
         }

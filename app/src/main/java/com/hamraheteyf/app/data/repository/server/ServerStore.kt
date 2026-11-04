@@ -87,6 +87,8 @@ class ServerStore(val api: HamrahApi, private val context: android.content.Conte
     init {
         // One owner for 401 handling: HamrahApi tells us, we sign out exactly once.
         api.onUnauthorized = { _sessionExpired.value = true; signOut() }
+        // A push arrived / the user tapped one: fetch now instead of waiting for the next 30 s poll.
+        scope.launch { refreshRequests.collect { runCatching { refresh(force = true) } } }
     }
 
     /** Called on app start: if a saved session exists, show it optimistically (from disk if offline) and refresh. */
@@ -279,6 +281,13 @@ class ServerStore(val api: HamrahApi, private val context: android.content.Conte
         }
 
     companion object {
+        private val refreshRequests = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(
+            extraBufferCapacity = 1, onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST,
+        )
+
+        /** Asks the live store (if any) to re-read the state right away. Safe from any thread. */
+        fun requestRefresh() { refreshRequests.tryEmit(Unit) }
+
         fun idOf(data: JsonElement?): String? =
             (data as? JsonObject)?.get("id")?.jsonPrimitive?.contentOrNull
 

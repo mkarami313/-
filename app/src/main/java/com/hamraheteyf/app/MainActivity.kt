@@ -24,6 +24,8 @@ import com.hamraheteyf.app.ui.common.SessionExpiredBanner
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import com.hamraheteyf.app.di.LocalAppContainer
+import com.hamraheteyf.app.data.repository.server.ServerStore
+import com.hamraheteyf.app.push.PendingDeepLink
 import com.hamraheteyf.app.push.PushNotifier
 import com.hamraheteyf.app.security.CredentialVault
 import com.hamraheteyf.app.security.LocalCredentialVault
@@ -42,6 +44,8 @@ class MainActivity : FragmentActivity() {
         AppForeground.install(application)
         PushNotifier.ensureChannel(this)
         maybeRequestNotificationPermission()
+        // Opened from a notification tap: remember where to go (once; not again on rotation).
+        if (savedInstanceState == null) PendingDeepLink.offer(intent)
         val container = (application as HamrahApplication).container
         val vault = CredentialVault(this)
         setContent {
@@ -67,6 +71,19 @@ class MainActivity : FragmentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        PendingDeepLink.offer(intent)
+        ServerStore.requestRefresh()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Back in the app: don't wait for the next poll tick to show new messages.
+        ServerStore.requestRefresh()
     }
 
     private fun maybeRequestNotificationPermission() {

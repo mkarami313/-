@@ -237,6 +237,8 @@ data class Conversation(
     val lastMessagePreview: String? = null, // generic preview; never shown in push payload
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L,
+    /** uid → epoch ms of the last message that participant has seen (server-maintained). */
+    val readAt: Map<String, Long> = emptyMap(),
 )
 
 /** A text message. Access rule follows the parent [Conversation]. */
