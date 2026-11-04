@@ -318,6 +318,11 @@ def main():
     check("ended conversation reopens as request", cid2 == cid and next(c for c in st["conversations"] if c["id"] == cid)["status"] == "REQUESTED")
     check("conversationRead", act(tc, "conversationRead", {"conversationId": cid}).get("ok"))
 
+    # ---- global search ---------------------------------------------------------------------
+    sr = data(tb, "search", {"q": "خواب شبانه"})["items"]
+    check("search finds topic", any(h["type"] == "topic" and h["id"] == t1 for h in sr), sr)
+    check("search finds learn", any(h["type"] == "learn" for h in data(tb, "search", {"q": "بازی‌های گفتاری"})["items"]))
+
     # ---- public profile ----------------------------------------------------------------------
     pf = data(tb, "userProfile", {"userId": uc})
     check("profile of pro", pf["user"]["expert"] and pf["professional"] and pf["stats"]["replies"] >= 1, pf)

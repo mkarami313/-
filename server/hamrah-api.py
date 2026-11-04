@@ -2342,17 +2342,15 @@ def a_search(store, uid, args):
             out.append({"type": t, "id": d["id"], "title": title, "sub": sub})
 
     if "qa" not in off:
-        for d in store.all("questions"):
-            if d.get("status") == "PUBLISHED" and hit(d.get("title"), d.get("body")):
-                add("question", d, d.get("title", ""), "پرسش")
+        for t in a_forumTopics(store, uid, {"q": q, "sort": "active", "size": 20})["items"]:
+            add("topic", t, t["title"], "گفتگو در انجمن")
     if "groups" not in off:
         for d in store.all("groups"):
-            if d.get("visibility") == "PUBLIC" and d.get("status") != "REMOVED" and hit(d.get("title"), d.get("description")):
+            if d.get("status") != "ARCHIVED" and hit(d.get("title"), d.get("description"), d.get("city")):
                 add("group", d, d.get("title", ""), "گروه")
     if "guides" not in off:
-        for d in store.all("guides"):
-            if d.get("status") == "PUBLISHED" and hit(d.get("title")):
-                add("guide", d, d.get("title", ""), "راهنما")
+        for it in a_learnList(store, uid, {"q": q, "size": 15})["items"]:
+            add("learn", it, it["title"], "ویدیوی آموزشی" if it["kind"] == "video" else "مقالهٔ آموزشی")
     if "directory" not in off:
         for d in store.all("users"):
             if d.get("accountType") in PRO_TYPES and d.get("status") not in ("BLOCKED",) and d["id"] not in hidden and hit(d.get("displayName"), d.get("city"), d.get("bio")):
