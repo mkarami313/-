@@ -5,6 +5,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
+    id("app.cash.paparazzi")
 }
 
 // Release signing is read from a gitignored keystore.properties at the repo root (never
@@ -20,14 +21,14 @@ val useFirebasePush = file("google-services.json").exists()
 
 android {
     namespace = "com.hamraheteyf.app"
-    compileSdk = 36
+    compileSdk = (findProperty("shotSdk") as String?)?.toInt() ?: 36   // -PshotSdk=34 only for Paparazzi screenshots (its layoutlib predates 36)
 
     defaultConfig {
         applicationId = "com.rasta.hamrah"   // renamed from com.hamraheteyf.app (2026-10-31)
         minSdk = 24
         targetSdk = 35
-        versionCode = 10015   // 10000+ : above the 9000 "moved" stub of the old package
-        versionName = "0.14.0"
+        versionCode = 10016   // 10000+ : above the 9000 "moved" stub of the old package
+        versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

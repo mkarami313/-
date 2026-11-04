@@ -3384,6 +3384,7 @@ def _topic_card(store, t, uid, admin, pros, flags=None):
     excerpt = re.sub(r"\s+", " ", t["body"] or "")[:180]
     return {
         "id": t["id"], "forumId": t.get("forum_id"), "groupId": t.get("group_id"), "title": t["title"],
+        "groupTitle": (store.get("groups", t["group_id"]) or {}).get("title") if t.get("group_id") else None,
         "excerpt": excerpt, "author": _author(store, t["author_id"], pros, t["anonymous"], uid, admin),
         "images": t.get("images") or [], "hasPoll": bool(t.get("poll")), "kind": t.get("kind") or "discussion",
         "status": t["status"], "pinned": t["pinned"], "locked": t["locked"],

@@ -157,7 +157,7 @@ fun LazyListScope.topicFeedItems(
                 val t = feed.items[i]
                 TopicRow(
                     t, onClick = { onOpen(t.id) },
-                    place = if (showForum) t.forumId?.let { forumTitles[it] } ?: if (t.groupId != null) "گفتگوی گروه" else null else null,
+                    place = if (showForum) t.forumId?.let { forumTitles[it] } ?: if (t.groupId != null) (t.groupTitle?.let { "گروهِ $it" } ?: "گفتگوی گروه") else null else null,
                     modifier = Modifier.padding(horizontal = Dimens.gutter, vertical = Dimens.cardGap / 2),
                 )
             }

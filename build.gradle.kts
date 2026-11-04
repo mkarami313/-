@@ -7,4 +7,5 @@ plugins {
     // On the classpath so the app module can apply it when google-services.json is present
     // (for FCM push only — app data lives on our own server, not Firebase).
     alias(libs.plugins.google.services) apply false
+    id("app.cash.paparazzi") version "1.3.5" apply false   // JVM screenshots (no emulator on the build box)
 }

@@ -44,7 +44,7 @@ object UpdateRules {
 }
 
 object AppUpdater {
-    const val MANIFEST_URL = "https://tizbin.org/hamrah/latest.json"
+    const val MANIFEST_URL = "https://tizbin.org/apps/hamrah.json"   // the download hub; hamrah/latest.json belongs to the old package's moved-stub
 
     /** Returns the newer release, or null when up to date. Throws on network errors. */
     suspend fun check(): UpdateInfo? = withContext(Dispatchers.IO) {

@@ -59,6 +59,7 @@ data class TopicCard(
     val id: String,
     val forumId: String? = null,
     val groupId: String? = null,
+    val groupTitle: String? = null,
     val title: String,
     val excerpt: String = "",
     val author: Person = Person(),
