@@ -117,6 +117,10 @@ dependencies {
     implementation(libs.kotlinx.coroutines.play.services)
     implementation(libs.kotlinx.serialization.json)
 
+    // Learning library video player (uploaded mp4s, HTTP Range streaming).
+    implementation("androidx.media3:media3-exoplayer:1.4.1")
+    implementation("androidx.media3:media3-ui:1.4.1")
+
     // Firebase Cloud Messaging — push transport only (no Firebase data/auth).
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)

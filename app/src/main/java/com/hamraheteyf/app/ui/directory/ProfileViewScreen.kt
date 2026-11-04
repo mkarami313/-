@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package com.hamraheteyf.app.ui.directory
 
 import androidx.compose.foundation.layout.*
@@ -20,6 +22,16 @@ import com.hamraheteyf.app.di.LocalAppContainer
 import com.hamraheteyf.app.di.appViewModelFactory
 import com.hamraheteyf.app.net.ApiResult
 import com.hamraheteyf.app.ui.common.*
+import com.hamraheteyf.app.community.PublicProfile
+import com.hamraheteyf.app.community.rememberCommunity
+import com.hamraheteyf.app.ui.kit.*
+import com.hamraheteyf.app.ui.theme.Dimens
+import com.hamraheteyf.app.ui.theme.Expert
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.outlined.*
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import com.hamraheteyf.app.ui.modules.Rec
 import com.hamraheteyf.app.ui.modules.Reminders
 import com.hamraheteyf.app.ui.modules.rememberRecClient
@@ -78,7 +90,12 @@ class ProfileViewModel(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+/** What the screen shows, merged from the local snapshot (when the user is in it) and the server's public profile. */
+private class ProfileView(
+    val name: String, val photoUrl: String?, val badge: String, val expert: Boolean, val accountLabel: String?,
+    val city: String?, val bio: String?, val joinedAt: Long?,
+)
+
 @Composable
 fun ProfileViewScreen(userId: String, onBack: () -> Unit, onOpenConversation: (String) -> Unit) {
     val container = LocalAppContainer.current
@@ -90,10 +107,50 @@ fun ProfileViewScreen(userId: String, onBack: () -> Unit, onOpenConversation: (S
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(message) { message?.let { snackbar.showSnackbar(it); vm.clearMessage() } }
     var confirmBlock by remember { mutableStateOf(false) }
+
+    // Forum authors are not in the local snapshot: the server's public profile fills the gap (and adds stats).
+    val client = rememberCommunity()
+    var remoteTick by remember { mutableIntStateOf(0) }
+    var remote by remember { mutableStateOf<PublicProfile?>(null) }
+    var remoteError by remember { mutableStateOf<String?>(null) }
+    var remoteDone by remember { mutableStateOf(false) }
+    LaunchedEffect(userId, client, remoteTick, state.blocked) {
+        if (client == null) { remoteDone = true; return@LaunchedEffect }
+        when (val r = client.profile(userId)) {
+            is ApiResult.Ok -> { remote = r.data; remoteError = null }
+            is ApiResult.Fail -> remoteError = r.message
+        }
+        remoteDone = true
+    }
+
+    val local = state.user
+    val ru = remote?.user
+    val view = when {
+        local != null -> ProfileView(
+            name = local.displayName, photoUrl = local.photoUrl ?: ru?.photoUrl,
+            badge = state.badge?.label ?: ru?.badge.orEmpty(),
+            expert = state.professional?.verificationStatus == VerificationStatus.VERIFIED || ru?.expert == true,
+            accountLabel = local.accountType.label,
+            city = local.city?.takeIf { local.privacy.showCity } ?: ru?.city,
+            bio = local.bio?.takeIf { local.privacy.showBio } ?: ru?.bio,
+            joinedAt = local.joinedAt.takeIf { it > 0 } ?: ru?.joinedAt,
+        )
+        ru != null -> ProfileView(
+            name = ru.name, photoUrl = ru.photoUrl, badge = ru.badge, expert = ru.expert,
+            accountLabel = ru.accountType?.let { t -> runCatching { AccountType.valueOf(t).label }.getOrNull() },
+            city = ru.city, bio = ru.bio, joinedAt = ru.joinedAt,
+        )
+        else -> null
+    }
+    val blocked = state.blocked || (local == null && remote?.blockedByMe == true)
+    val canMessage = remote?.canMessage ?: (local != null)
+    val prof = state.professional
+    val verifiedPro = prof?.verificationStatus == VerificationStatus.VERIFIED || (prof == null && ru?.expert == true)
+
     if (confirmBlock) {
         AlertDialog(
             onDismissRequest = { confirmBlock = false },
-            title = { Text("مسدودکردن ${state.user?.displayName.orEmpty()}؟") },
+            title = { Text("مسدودکردن ${view?.name.orEmpty()}؟") },
             text = { Text("این کاربر دیگر نمی‌تواند به شما پیام بدهد یا درخواست گفتگو بفرستد و شما هم او را در فهرست‌ها نمی‌بینید. هر زمان می‌توانید از همین صفحه یا از تنظیمات مسدودیت را بردارید.") },
             confirmButton = { TextButton(onClick = { confirmBlock = false; vm.block() }) { Text("مسدود شود", color = MaterialTheme.colorScheme.error) } },
             dismissButton = { TextButton(onClick = { confirmBlock = false }) { Text("انصراف") } },
@@ -102,71 +159,135 @@ fun ProfileViewScreen(userId: String, onBack: () -> Unit, onOpenConversation: (S
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
-        topBar = {
-            com.hamraheteyf.app.ui.common.ScreenHeader("پروفایل", onBack = onBack)
-        },
+        topBar = { AppTopBar("پروفایل", onBack = onBack) },
+        containerColor = MaterialTheme.colorScheme.background,
     ) { padding ->
-        val user = state.user
-        if (user == null) {
-            EmptyState("این پروفایل در دسترس نیست.", Modifier.padding(padding))
+        if (view == null) {
+            when {
+                !remoteDone -> LoadingView(Modifier.padding(padding))
+                remoteError != null -> ErrorView(remoteError.orEmpty(), { remoteDone = false; remoteTick++ }, Modifier.padding(padding))
+                else -> EmptyView(Icons.Outlined.PersonOff, "این پروفایل در دسترس نیست.", modifier = Modifier.padding(padding))
+            }
             return@Scaffold
         }
-        Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(user.displayName, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-                state.badge?.let { AuthorBadgeChip(it) }
+        Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = Dimens.gutter)) {
+            Spacer(Modifier.height(Dimens.s))
+            // ---- header
+            AppCard {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    val photo = prof?.photoId?.let { id -> client?.fileUrl(id) }
+                    if (photo != null) RemoteImage(photo, Modifier.size(72.dp).clip(CircleShape)) else UserAvatar(view.name, view.photoUrl, 72.dp)
+                    Spacer(Modifier.width(Dimens.m))
+                    Column(Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(view.name, style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                            if (view.expert) { Spacer(Modifier.width(4.dp)); Icon(VerifiedIcon, "متخصصِ تأییدشده", tint = Expert, modifier = Modifier.size(20.dp)) }
+                        }
+                        if (prof != null && prof.title.isNotBlank()) Text(prof.title, style = MaterialTheme.typography.bodyMedium)
+                        else view.accountLabel?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = muted()) }
+                        if (view.badge.isNotBlank()) {
+                            Spacer(Modifier.height(4.dp))
+                            Pill(view.badge, if (view.expert) Expert else MaterialTheme.colorScheme.primary)
+                        }
+                        val meta = listOfNotNull(
+                            view.city?.takeIf { it.isNotBlank() },
+                            view.joinedAt?.takeIf { it > 0 }?.let { "عضو از ${joinedFa(it)}" },
+                        ).joinToString(" · ")
+                        if (meta.isNotEmpty()) { Spacer(Modifier.height(4.dp)); Text(meta, style = MaterialTheme.typography.labelMedium, color = muted()) }
+                    }
+                }
+                remote?.stats?.let { st ->
+                    Spacer(Modifier.height(Dimens.m))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Row(Modifier.fillMaxWidth().padding(top = Dimens.s)) {
+                        Stat("موضوع", st.topics, Modifier.weight(1f)); Stat("پاسخ", st.replies, Modifier.weight(1f)); Stat("پسندِ دریافتی", st.likes, Modifier.weight(1f))
+                    }
+                }
+                if (!state.isSelf) {
+                    Spacer(Modifier.height(Dimens.m))
+                    if (blocked) {
+                        Text("این کاربر را مسدود کرده‌اید.", style = MaterialTheme.typography.bodyMedium, color = muted())
+                        Spacer(Modifier.height(Dimens.s))
+                        OutlinedButton(onClick = { vm.unblock() }, modifier = Modifier.fillMaxWidth().heightIn(min = Dimens.touch)) { Text("برداشتنِ مسدودیت") }
+                    } else {
+                        Row(horizontalArrangement = Arrangement.spacedBy(Dimens.s)) {
+                            if (canMessage) Button(onClick = { vm.requestConversation(onOpenConversation) }, modifier = Modifier.weight(1f).heightIn(min = Dimens.touch)) {
+                                Icon(Icons.Outlined.Mail, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("پیام")
+                            }
+                            OutlinedButton(onClick = { confirmBlock = true }, modifier = Modifier.then(if (canMessage) Modifier else Modifier.weight(1f)).heightIn(min = Dimens.touch)) { Text("مسدود کردن") }
+                        }
+                        if (!canMessage) Text("این کاربر درخواستِ گفتگو نمی‌پذیرد.", style = MaterialTheme.typography.labelMedium, color = muted(), modifier = Modifier.padding(top = 4.dp))
+                    }
+                }
             }
-            Spacer(Modifier.height(4.dp))
-            Text(user.accountType.label, style = MaterialTheme.typography.labelMedium, color = mutedColor())
 
-            if (user.privacy.showCity && !user.city.isNullOrBlank()) {
-                Spacer(Modifier.height(4.dp))
-                Text("شهر: ${user.city}", style = MaterialTheme.typography.bodyMedium)
-            }
-            if (user.privacy.showBio && !user.bio.isNullOrBlank()) {
-                Spacer(Modifier.height(8.dp))
-                Text(user.bio!!, style = MaterialTheme.typography.bodyMedium)
+            val bio = view.bio
+            if (!bio.isNullOrBlank()) {
+                SectionTitle("درباره")
+                AppCard { Text(bio, style = MaterialTheme.typography.bodyMedium) }
             }
 
-            state.professional?.let { prof ->
-                Spacer(Modifier.height(16.dp))
-                HorizontalDivider()
-                Spacer(Modifier.height(12.dp))
-                Text("اطلاعات تخصصی", style = MaterialTheme.typography.titleMedium)
-                Spacer(Modifier.height(4.dp))
-                Text("عنوان: ${prof.title}", style = MaterialTheme.typography.bodyMedium)
-                if (prof.workAreas.isNotEmpty()) Text("حوزه‌ها: ${prof.workAreas.joinToString("، ")}", style = MaterialTheme.typography.bodyMedium)
-                Text(if (prof.offersOnline) "امکان پاسخ‌گویی آنلاین: دارد" else "امکان پاسخ‌گویی آنلاین: ندارد", style = MaterialTheme.typography.bodyMedium)
-                if (state.isSelf) Text("وضعیت تأیید: ${prof.verificationStatus.label}", style = MaterialTheme.typography.bodyMedium)
-                prof.experience?.let { Text("سابقه: $it", style = MaterialTheme.typography.bodyMedium) }
-                prof.fee?.takeIf { it.isNotBlank() }?.let { Text("هزینه: $it", style = MaterialTheme.typography.bodyMedium) }
-                prof.hours?.takeIf { it.isNotBlank() }?.let { Text("ساعت حضور: $it", style = MaterialTheme.typography.bodyMedium) }
-                Spacer(Modifier.height(8.dp))
-                Text("مدارک حرفه‌ای در پروفایل عمومی نمایش داده نمی‌شوند و فقط توسط مدیران بررسی می‌شوند.", style = MaterialTheme.typography.labelMedium, color = mutedColor())
+            prof?.let { p ->
+                SectionTitle("اطلاعاتِ تخصصی")
+                AppCard {
+                    if (p.workAreas.isNotEmpty()) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            p.workAreas.forEach { Pill(it) }
+                        }
+                        Spacer(Modifier.height(Dimens.s))
+                    }
+                    InfoLine(Icons.Outlined.Videocam, if (p.offersOnline) "پاسخ‌گوییِ آنلاین دارد" else "پاسخ‌گوییِ آنلاین ندارد")
+                    p.city?.takeIf { it.isNotBlank() }?.let { InfoLine(Icons.Outlined.Place, it) }
+                    p.experience?.takeIf { it.isNotBlank() }?.let { InfoLine(Icons.Outlined.WorkHistory, "سابقه: $it") }
+                    p.fee?.takeIf { it.isNotBlank() }?.let { InfoLine(Icons.Outlined.Payments, "هزینه: $it") }
+                    p.hours?.takeIf { it.isNotBlank() }?.let { InfoLine(Icons.Outlined.Schedule, "ساعتِ حضور: $it") }
+                    if (state.isSelf) InfoLine(Icons.Outlined.Verified, "وضعیتِ تأیید: ${p.verificationStatus.label}")
+                    Spacer(Modifier.height(4.dp))
+                    Text("مدارکِ حرفه‌ای در پروفایلِ عمومی نمایش داده نمی‌شوند و فقط مدیران آن‌ها را بررسی می‌کنند.", style = MaterialTheme.typography.labelSmall, color = muted())
+                }
             }
 
-            if (!state.isSelf && !state.blocked && state.professional?.verificationStatus == VerificationStatus.VERIFIED) {
-                OpenSlots(userId, snackbar)
+            if (!state.isSelf && !blocked && prof?.verificationStatus == VerificationStatus.VERIFIED) {
+                Spacer(Modifier.height(Dimens.m))
+                AppCard { OpenSlots(userId, snackbar) }
+            }
+
+            if (verifiedPro) {
+                Spacer(Modifier.height(Dimens.m))
+                AppCard { ReviewsSection("pro", userId, canReview = !state.isSelf && !blocked) }
             }
 
             if (!state.isSelf) {
-                Spacer(Modifier.height(20.dp))
-                InfoBanner("گفتگو جایگزین تشخیص، درمان یا مراقبت اورژانسی نیست و هیچ هزینه‌ای ندارد.")
-                Spacer(Modifier.height(12.dp))
-                if (state.blocked) {
-                    Text("این کاربر را مسدود کرده‌اید.", style = MaterialTheme.typography.bodyMedium, color = mutedColor())
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedButton(onClick = { vm.unblock() }, modifier = Modifier.fillMaxWidth()) { Text("برداشتن مسدودیت") }
-                } else {
-                    BigPrimaryButton(text = "درخواست گفتگو", onClick = { vm.requestConversation(onOpenConversation) })
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedButton(onClick = { confirmBlock = true }, modifier = Modifier.fillMaxWidth()) { Text("مسدودکردن کاربر") }
-                }
-                com.hamraheteyf.app.ui.common.ReportLink("USER", userId, "گزارش این کاربر")
+                Spacer(Modifier.height(Dimens.m))
+                Text("گفتگو جایگزینِ تشخیص، درمان یا مراقبتِ اورژانسی نیست و هیچ هزینه‌ای ندارد.", style = MaterialTheme.typography.labelSmall, color = muted())
+                ReportLink("USER", userId, "گزارشِ این کاربر")
             }
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(Dimens.xl))
         }
     }
+}
+
+@Composable
+private fun Stat(label: String, value: Int, modifier: Modifier) {
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(value.toPersianDigits(), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Text(label, style = MaterialTheme.typography.labelSmall, color = muted())
+    }
+}
+
+@Composable
+private fun InfoLine(icon: androidx.compose.ui.graphics.vector.ImageVector, text: String) {
+    Row(Modifier.padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, tint = muted(), modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(Dimens.s))
+        Text(text, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+private fun joinedFa(ms: Long): String {
+    val c = java.util.Calendar.getInstance().apply { timeInMillis = ms }
+    val j = Jalali.toJalali(c.get(java.util.Calendar.YEAR), c.get(java.util.Calendar.MONTH) + 1, c.get(java.util.Calendar.DAY_OF_MONTH))
+    return "${Jalali.MONTHS[j.m - 1]} ${j.y.toPersianDigits()}"
 }
 
 
@@ -183,9 +304,6 @@ private fun OpenSlots(ownerId: String, snackbar: SnackbarHostState) {
         .filter { it.ownerId == ownerId && !it.mine && it.status == "OPEN" && (Reminders.slotAt(it)?.let { t -> t > now } ?: true) }
         .sortedBy { Reminders.slotAt(it) ?: Long.MAX_VALUE }
         .take(6)
-    Spacer(Modifier.height(16.dp))
-    HorizontalDivider()
-    Spacer(Modifier.height(12.dp))
     Text("نوبت‌های آزاد", style = MaterialTheme.typography.titleMedium)
     Text("رزرو رایگان است و فقط برای هماهنگی زمان ملاقات است.", style = MaterialTheme.typography.labelMedium, color = mutedColor())
     Spacer(Modifier.height(6.dp))

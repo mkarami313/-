@@ -44,6 +44,7 @@ private object Done {
 fun ToolsHubScreen(
     onBack: () -> Unit, onSchedule: () -> Unit, onStories: () -> Unit, onAac: () -> Unit,
     onLog: () -> Unit = {}, onEmergency: () -> Unit = {}, onReward: () -> Unit = {}, onFirstThen: () -> Unit = {}, onTimer: () -> Unit = {},
+    onMilestones: () -> Unit = {},
 ) {
     Scaffold(topBar = { ScreenHeader("ابزارهای روزانه", onBack = onBack) }) { pad ->
         Column(Modifier.padding(pad).verticalScroll(rememberScrollState()).padding(12.dp).fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -55,6 +56,7 @@ fun ToolsHubScreen(
             HubTile("اول-بعد", "تابلوی «اول این، بعد آن» برای کمک به انتقال بین فعالیت‌ها", Icons.Outlined.SwapHoriz, onFirstThen)
             HubTile("نمودار پاداش", "ستاره‌های روزانه تا رسیدن به هدف و پاداش", Icons.Outlined.Star, onReward)
             HubTile("تایمر تصویری", "زمان باقی‌مانده را به شکل دایرهٔ رنگی نشان می‌دهد", Icons.Outlined.Timer, onTimer)
+            HubTile("نقاطِ عطفِ رشد", "چک‌لیستِ سنی (۲ ماهگی تا ۵ سالگی) بر پایهٔ راهنمای CDC", Icons.Outlined.ChildCare, onMilestones)
         }
     }
 }
