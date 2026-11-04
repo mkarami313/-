@@ -36,7 +36,7 @@ object AppFeatures {
             )
         }
         composable(Routes.NOTIFICATIONS) {
-            NotificationsScreen(onBack = { nav.popBackStack() })
+            NotificationsScreen(onBack = { nav.popBackStack() }, onOpen = { nav.navigate(it) })
         }
     }
 
@@ -244,6 +244,7 @@ object AppFeatures {
                 onRules = { nav.navigate(Routes.LEGAL_RULES) },
                 onPrivacy = { nav.navigate(Routes.LEGAL_PRIVACY) },
                 onSharesReceived = { nav.navigate(Routes.SHARES_RECEIVED) },
+                onNavigate = { nav.navigate(it) },
             )
         }
         composable(Routes.SETTINGS) { SettingsScreen(onBack = { nav.popBackStack() }) }
