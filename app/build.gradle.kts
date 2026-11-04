@@ -23,10 +23,10 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.hamraheteyf.app"
+        applicationId = "com.rasta.hamrah"   // renamed from com.hamraheteyf.app (2026-10-31)
         minSdk = 24
         targetSdk = 35
-        versionCode = 15
+        versionCode = 10015   // 10000+ : above the 9000 "moved" stub of the old package
         versionName = "0.14.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -131,4 +131,20 @@ dependencies {
 // so a build without google-services.json still succeeds (push simply disabled).
 if (useFirebasePush) {
     apply(plugin = "com.google.gms.google-services")
+}
+
+// ── One developer signature (do not remove) ──────────────────────────────────────────────────────
+// Every release APK is re-signed by /root/keys/sign-app.sh: the Hamsohbat key (the one Cafe Bazaar knows),
+// via APK v3 key rotation from the key this app was first published with. Publishing an APK that skipped
+// this breaks updates for every phone that already has a rotated build.
+tasks.configureEach {
+    if (name.startsWith("assemble") && name.endsWith("Release")) {
+        doLast {
+            val signer = file("/root/keys/sign-app.sh")
+            val apks = fileTree(layout.buildDirectory.dir("outputs/apk")).matching { include("**/*.apk") }
+                .files.filter { it.path.contains("release", ignoreCase = true) }
+            if (!signer.exists()) logger.warn("sign-app.sh missing — release APKs were NOT re-signed")
+            else if (apks.isNotEmpty()) project.exec { commandLine(listOf(signer.path) + apks.map { it.path }) }
+        }
+    }
 }
