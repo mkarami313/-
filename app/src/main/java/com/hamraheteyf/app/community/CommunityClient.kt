@@ -530,6 +530,7 @@ class CommunityClient(val api: HamrahApi) {
                     c.outputStream.use { out ->
                         val buf = ByteArray(256 * 1024); var sent = 0L; var n: Int
                         while (inp.read(buf).also { n = it } > 0) {
+                            kotlinx.coroutines.yield()  // throws on cancel, so leaving the form stops the upload
                             out.write(buf, 0, n); sent += n
                             onProgress(((sent * 100) / size).toInt())
                         }
