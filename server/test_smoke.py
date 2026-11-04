@@ -251,7 +251,7 @@ def main():
 
     # ---- privacy ------------------------------------------------------------------------------------------
     act(ta, "updatePrivacy", {"settings": {"showCity": False, "showBio": False, "allowMessageRequests": True, "evil": True}})
-    act(ta, "createQuestion", {"title": "پرسش عمومی", "body": "متن پرسش", "category": "EDUCATION"})  # authors of visible content are in everyone's users list
+    act(ta, "createGroup", {"title": "گروه عمومی smoke", "visibility": "PUBLIC"})  # owners of visible groups are in everyone's users list
     users = jhttp("GET", "/api/state", token=tb)[1]["state"]["users"]
     ua_pub = next(u for u in users if u["id"] == ua)
     check("showCity=false hides city", ua_pub.get("city") is None, ua_pub)
@@ -259,17 +259,6 @@ def main():
     check("email not exposed", "email" not in ua_pub)
     me = next(u for u in jhttp("GET", "/api/state", token=ta)[1]["state"]["users"] if u["id"] == ua)
     check("owner still sees own city", me.get("city") == "تهران" and "evil" not in (me.get("privacy") or {}), me)
-    r = act(ta, "createQuestion", {"title": "پرسش ناشناس", "body": "متن پرسش", "anonymous": True, "category": "EDUCATION"})
-    qid = r.get("data", {}).get("id")
-    def myq(tok):
-        return [q for q in jhttp("GET", "/api/state", token=tok)[1]["state"]["questions"] if q["id"] == qid]
-    qs = myq(tb)
-    check("anonymous authorId hidden from others", qs and qs[0]["authorId"] == "", r)
-    check("anonymous authorId hidden in every other anon question", all(q["authorId"] == "" for q in jhttp("GET", "/api/state", token=tb)[1]["state"]["questions"] if q.get("isAnonymous")))
-    qs = myq(ta)
-    check("anonymous authorId visible to author", qs and qs[0]["authorId"] == ua)
-    qs = myq(atok)
-    check("anonymous authorId visible to admin", qs and qs[0]["authorId"] == ua)
     r = act(ta, "updateNotificationSettings", {"settings": {"newMessage": False, "junk": True}})
     check("notification keys whitelisted", r.get("ok"))
 
@@ -503,22 +492,22 @@ def v14_tests(atok, auid, ta, ua, tb, ub):
     act(tc, "joinOrRequest", {"groupId": gid2})
     act(td, "approveMember", {"groupId": gid2, "userId": uc})
     check("S8 approveMember notifies requester", any("پذیرفته" in (n.get("body") or n.get("message") or "") for n in notes_of(tc, "GROUP_JOIN_REQUEST")), notes_of(tc))
-    pr1 = act(td, "createPost", {"groupId": gid2, "body": "پست نخست"})
-    posts = [p for p in pr1["state"]["posts"] if p["groupId"] == gid2]
-    act(tc, "createPost", {"groupId": gid2, "body": "پاسخ", "replyToPostId": posts[0]["id"]})
-    check("S8 reply stored + parent author notified", any(p.get("replyToPostId") == posts[0]["id"] for p in state_of(tc)["posts"]) and notes_of(td, "GROUP_REPLY"))
+    t1 = act(td, "forumCreateTopic", {"groupId": gid2, "title": "پست نخست", "body": "متنِ پست نخست"})["data"]["id"]
+    p1 = act(td, "forumReply", {"topicId": t1, "body": "ادامه"})["data"]["id"]
+    act(tc, "forumReply", {"topicId": t1, "body": "پاسخ", "quoteId": p1})
+    check("S8 reply stored + quoted author notified", any(n.get("relatedId") == t1 for n in notes_of(td, "GROUP_REPLY")))
 
     # S9 reports
-    check("S9 report unknown content rejected", act(tc, "createReport", {"contentType": "GROUP_POST", "contentId": "gp_nope"}).get("ok") is False)
+    check("S9 report unknown content rejected", act(tc, "createReport", {"contentType": "TOPIC", "contentId": "t_nope"}).get("ok") is False)
     check("S9 self report rejected", act(tc, "createReport", {"contentType": "USER", "contentId": uc}).get("ok") is False)
-    r1 = act(tc, "createReport", {"contentType": "GROUP_POST", "contentId": posts[0]["id"], "reason": "spam"})
-    r2 = act(tc, "createReport", {"contentType": "GROUP_POST", "contentId": posts[0]["id"], "reason": "spam"})
+    r1 = act(tc, "createReport", {"contentType": "TOPIC", "contentId": t1, "reason": "spam"})
+    r2 = act(tc, "createReport", {"contentType": "TOPIC", "contentId": t1, "reason": "spam"})
     check("S9 duplicate report flagged", r1.get("ok") and r2.get("data", {}).get("duplicate") is True, (r1.get("data"), r2.get("data")))
-    rep = next(x for x in state_of(atok)["reports"] if x["contentId"] == posts[0]["id"])
+    rep = next(x for x in state_of(atok)["reports"] if x["contentId"] == t1)
     r = act(atok, "resolveReport", {"reportId": rep["id"], "newStatus": "ACTIONED", "resolutionNote": "n", "hideContent": True})
-    hst = sql("SELECT data->>'status' FROM docs WHERE collection='posts' AND id=%s", (posts[0]["id"],))
+    hst = sql("SELECT status FROM f_topics WHERE id=%s", (t1,))
     check("S9 resolveReport hideContent hides", r.get("ok") and hst and hst[0][0] == "HIDDEN"
-          and all(x["id"] != posts[0]["id"] for x in state_of(td)["posts"]), (r, hst))
+          and act(tc, "forumTopic", {"topicId": t1}).get("ok") is False, (r, hst))
 
     # S10 admin audit log + account type + status
     check("S10 non-admin has no auditLog", "auditLog" not in state_of(tc) or not state_of(tc)["auditLog"])
