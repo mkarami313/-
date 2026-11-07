@@ -11,6 +11,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.material.icons.automirrored.outlined.Logout
+import androidx.compose.ui.semantics.Role
 import com.hamraheteyf.app.community.CommunityClient
 import com.hamraheteyf.app.community.GroupInfo
 import com.hamraheteyf.app.ui.common.RemoteImage
@@ -45,8 +48,9 @@ fun GroupHeader(
                         Counter(Icons.Outlined.People, g.memberCount, contentDescription = "عضو")
                         g.city?.takeIf { it.isNotBlank() }?.let { Pill(it, muted(), icon = Icons.Outlined.Place) }
                         Pill(if (isPrivate) "خصوصی" else "عمومی", muted(), icon = if (isPrivate) Icons.Outlined.Lock else Icons.Outlined.Public)
+                        if (g.status == "ARCHIVED") Pill("بسته‌شده", Danger, icon = Icons.Outlined.Archive)
                         when (info.myRole) {
-                            "OWNER" -> Pill("سازنده", Apricot)
+                            "OWNER" -> Pill("سازنده", ApricotInk)
                             "MODERATOR" -> Pill("ناظر", Expert)
                         }
                     }
@@ -80,25 +84,33 @@ fun GroupHeader(
 @Composable
 private fun MembershipAction(info: GroupInfo, busy: Boolean, onJoin: () -> Unit, onCancel: () -> Unit, onNotify: (Boolean) -> Unit, onLeave: () -> Unit) {
     val isPrivate = info.group.visibility == "PRIVATE"
+    val archived = info.group.status == "ARCHIVED"
     when (info.myStatus) {
-        "ACTIVE" -> Row(verticalAlignment = Alignment.CenterVertically) {
-            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+        // Stacked, not side by side: at large font sizes the switch label and the button no longer squeeze each other.
+        "ACTIVE" -> Column {
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = Dimens.touch)
+                    .toggleable(info.notify, enabled = !busy, role = Role.Switch, onValueChange = onNotify),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Icon(if (info.notify) Icons.Outlined.NotificationsActive else Icons.Outlined.NotificationsOff, null, tint = muted(), modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
                 Text("اعلانِ گفتگوهای تازه", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                Switch(info.notify, onNotify, enabled = !busy)
+                Switch(info.notify, null, enabled = !busy)
             }
-            Spacer(Modifier.width(Dimens.s))
-            OutlinedButton(onClick = onLeave, enabled = !busy) { Text("ترکِ گروه") }
+            OutlinedButton(onClick = onLeave, enabled = !busy, modifier = Modifier.align(Alignment.End).heightIn(min = Dimens.touch)) {
+                Icon(Icons.AutoMirrored.Outlined.Logout, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("ترکِ گروه")
+            }
         }
         "REQUESTED" -> Row(verticalAlignment = Alignment.CenterVertically) {
-            Pill("در انتظارِ تأییدِ مدیر", Gold, icon = Icons.Outlined.HourglassTop)
+            Pill("در انتظارِ تأییدِ مدیر", GoldInk, icon = Icons.Outlined.HourglassTop)
             Spacer(Modifier.weight(1f))
             OutlinedButton(onClick = onCancel, enabled = !busy) { Text("لغوِ درخواست") }
         }
         "REMOVED" -> Text("مدیرِ گروه شما را از این گروه حذف کرده است و امکانِ پیوستنِ دوباره نیست.",
             style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
-        else -> Button(onClick = onJoin, enabled = !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+        else -> if (archived) Text("این گروه بسته شده است و عضوِ تازه نمی‌پذیرد.", style = MaterialTheme.typography.bodyMedium, color = muted())
+        else Button(onClick = onJoin, enabled = !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
             if (busy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
             else {
                 Icon(if (isPrivate) Icons.Outlined.Lock else Icons.Outlined.GroupAdd, null, Modifier.size(18.dp))

@@ -1,6 +1,8 @@
 package com.hamraheteyf.app.ui.forum
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
@@ -81,9 +83,9 @@ fun PollEditor(
         if (options.size < 10) TextButton(onClick = { onOptions(options + "") }) {
             Icon(Icons.Outlined.Add, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("افزودنِ گزینه")
         }
-        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { onMulti(!multi) }, verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).toggleable(multi, role = Role.Switch, onValueChange = onMulti), verticalAlignment = Alignment.CenterVertically) {
             Text("چند گزینه‌ای", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-            Switch(multi, onMulti)
+            Switch(multi, null)
         }
         Text("مدتِ نظرسنجی", style = MaterialTheme.typography.labelLarge, color = muted())
         Spacer(Modifier.height(4.dp))
@@ -96,12 +98,12 @@ fun PollEditor(
 /** A labelled switch row with a one-line explanation. */
 @Composable
 fun SwitchRow(title: String, note: String?, checked: Boolean, onChange: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).clickable { onChange(!checked) }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).toggleable(checked, role = Role.Switch, onValueChange = onChange).padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.bodyLarge)
             if (note != null) Text(note, style = MaterialTheme.typography.bodySmall, color = muted())
         }
         Spacer(Modifier.width(Dimens.s))
-        Switch(checked, onChange)
+        Switch(checked, null)
     }
 }

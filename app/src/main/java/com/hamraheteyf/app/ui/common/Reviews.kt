@@ -15,6 +15,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -28,6 +30,7 @@ import com.hamraheteyf.app.ui.kit.muted
 import com.hamraheteyf.app.ui.kit.ratingFa
 import com.hamraheteyf.app.ui.theme.Dimens
 import com.hamraheteyf.app.ui.theme.Gold
+import com.hamraheteyf.app.ui.theme.GoldInk
 import kotlinx.coroutines.launch
 
 /** Five stars for [rating] (0..5, halves shown). */
@@ -82,42 +85,11 @@ fun ReviewsSection(targetType: String, targetId: String, canReview: Boolean) {
     }
     val mine = data?.items?.firstOrNull { it.mine }
 
-    Column(Modifier.fillMaxWidth()) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = Dimens.s)) {
-            Text("نظرها و امتیاز", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-            if (canReview && data != null) TextButton(onClick = { editing = true }, modifier = Modifier.heightIn(min = Dimens.touch)) {
-                Icon(Icons.Outlined.RateReview, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp))
-                Text(if (mine != null) "ویرایشِ نظرِ من" else "ثبتِ نظر")
-            }
-        }
-        val d = data
-        when {
-            d == null && error != null -> Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(error.orEmpty(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.weight(1f))
-                TextButton(onClick = { error = null; tick++ }) { Text("تلاشِ دوباره") }
-            }
-            d == null -> Box(Modifier.fillMaxWidth().padding(Dimens.m), contentAlignment = Alignment.Center) { CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp) }
-            d.count == 0 || d.items.isEmpty() -> Text(
-                if (canReview) "هنوز نظری ثبت نشده است. اولین نفر باشید." else "هنوز نظری ثبت نشده است.",
-                style = MaterialTheme.typography.bodyMedium, color = muted(),
-            )
-            else -> {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(ratingFa(d.average ?: 0.0), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.width(Dimens.m))
-                    Column {
-                        StarRow(d.average ?: 0.0, 18.dp)
-                        Text("از ${d.count.toPersianDigits()} نظر", style = MaterialTheme.typography.labelMedium, color = muted())
-                    }
-                }
-                Spacer(Modifier.height(Dimens.s))
-                d.items.forEach { r ->
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                    ReviewRow(r, onEdit = { editing = true }, onDelete = { confirmDelete = true })
-                }
-            }
-        }
-    }
+    ReviewsContent(
+        data, error, canReview,
+        onRetry = { error = null; tick++ },
+        onWrite = { editing = true }, onDelete = { confirmDelete = true },
+    )
 
     if (editing && client != null) ReviewDialog(mine, saving, onDismiss = { editing = false }) { rating, text ->
         if (saving) return@ReviewDialog
@@ -149,12 +121,68 @@ fun ReviewsSection(targetType: String, targetId: String, canReview: Boolean) {
     )
 }
 
+/** The stateless body of [ReviewsSection]: header, average, the list — also what the screenshot tests render. */
+@Composable
+fun ReviewsContent(
+    data: ReviewList?,
+    error: String?,
+    canReview: Boolean,
+    onRetry: () -> Unit,
+    onWrite: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val mine = data?.items?.firstOrNull { it.mine }
+    Column(Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = Dimens.s)) {
+            Text("نظرها و امتیاز", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            if (canReview && data != null) TextButton(onClick = onWrite, modifier = Modifier.heightIn(min = Dimens.touch)) {
+                Icon(Icons.Outlined.RateReview, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp))
+                Text(if (mine != null) "ویرایشِ نظرِ من" else "ثبتِ نظر")
+            }
+        }
+        when {
+            data == null && error != null -> Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.weight(1f))
+                TextButton(onClick = onRetry) { Text("تلاشِ دوباره") }
+            }
+            data == null -> Box(Modifier.fillMaxWidth().padding(Dimens.m), contentAlignment = Alignment.Center) { CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp) }
+            // count/average are over every review; the list leaves out people I blocked, so it can be empty
+            // while the average is real — still show the score then.
+            data.count == 0 -> Text(
+                if (canReview) "هنوز نظری ثبت نشده است. اولین نفر باشید." else "هنوز نظری ثبت نشده است.",
+                style = MaterialTheme.typography.bodyMedium, color = muted(),
+            )
+            else -> {
+                val avg = data.average ?: 0.0
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.semantics(mergeDescendants = true) {
+                        contentDescription = "امتیاز ${ratingFa(avg)} از ۵، از ${data.count.toPersianDigits()} نظر"
+                    },
+                ) {
+                    Text(ratingFa(avg), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.width(Dimens.m))
+                    Column {
+                        StarRow(avg, 18.dp)
+                        Text("از ${data.count.toPersianDigits()} نظر", style = MaterialTheme.typography.labelMedium, color = muted())
+                    }
+                }
+                Spacer(Modifier.height(Dimens.s))
+                data.items.forEach { r ->
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    ReviewRow(r, onEdit = onWrite, onDelete = onDelete)
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun ReviewRow(r: Review, onEdit: () -> Unit, onDelete: () -> Unit) {
     Column(Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             AuthorLine(r.author, relativeTimeFa(if (r.updatedAt > 0) r.updatedAt else r.createdAt), Modifier.weight(1f), size = 30.dp)
-            StarRow(r.rating.toDouble(), 14.dp)
+            Box(Modifier.semantics { contentDescription = "${r.rating.toPersianDigits()} ستاره" }) { StarRow(r.rating.toDouble(), 14.dp) }
         }
         if (r.body.isNotBlank()) {
             Spacer(Modifier.height(4.dp))
@@ -183,7 +211,7 @@ private fun ReviewDialog(mine: Review?, saving: Boolean, onDismiss: () -> Unit, 
                     }
                 }
                 Text(if (rating == 0) "امتیاز را انتخاب کنید" else labels[rating], style = MaterialTheme.typography.labelLarge,
-                    color = if (rating == 0) muted() else Gold, modifier = Modifier.align(Alignment.CenterHorizontally))
+                    color = if (rating == 0) muted() else GoldInk, modifier = Modifier.align(Alignment.CenterHorizontally))
                 Spacer(Modifier.height(Dimens.s))
                 OutlinedTextField(text, { text = it.take(2000) }, Modifier.fillMaxWidth(), minLines = 3, maxLines = 6,
                     placeholder = { Text("تجربهٔ خود را محترمانه بنویسید (اختیاری)") })

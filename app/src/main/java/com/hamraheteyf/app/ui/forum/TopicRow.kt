@@ -14,6 +14,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import com.hamraheteyf.app.community.CommunityClient
 import com.hamraheteyf.app.community.TopicCard
 import com.hamraheteyf.app.community.rememberCommunity
 import com.hamraheteyf.app.ui.common.RemoteImage
@@ -22,15 +25,14 @@ import com.hamraheteyf.app.ui.kit.*
 import com.hamraheteyf.app.ui.theme.Dimens
 import com.hamraheteyf.app.ui.theme.Expert
 import com.hamraheteyf.app.ui.theme.ExpertContainer
-import com.hamraheteyf.app.ui.theme.Gold
+import com.hamraheteyf.app.ui.theme.GoldInk
 
 /**
  * The one topic list item of the app: author, title (bold when unread), excerpt, status pills,
  * counters and the time of the last activity; the first image as a thumbnail on the far side.
  */
 @Composable
-fun TopicRow(t: TopicCard, onClick: () -> Unit, modifier: Modifier = Modifier, place: String? = null) {
-    val client = rememberCommunity()
+fun TopicRow(t: TopicCard, onClick: () -> Unit, modifier: Modifier = Modifier, place: String? = null, client: CommunityClient? = rememberCommunity()) {
     AppCard(modifier, onClick = onClick) {
         Row(verticalAlignment = Alignment.Top) {
             Column(Modifier.weight(1f)) {
@@ -48,7 +50,8 @@ fun TopicRow(t: TopicCard, onClick: () -> Unit, modifier: Modifier = Modifier, p
                 Spacer(Modifier.height(6.dp))
                 Row(verticalAlignment = Alignment.Top) {
                     if (t.unread) {
-                        Box(Modifier.padding(top = 8.dp, end = 6.dp).size(7.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary))
+                        Box(Modifier.padding(top = 8.dp, end = 6.dp).size(7.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary)
+                            .semantics { contentDescription = "پاسخِ خوانده‌نشده" })
                     }
                     Text(
                         t.title, style = MaterialTheme.typography.titleSmall,
@@ -65,7 +68,7 @@ fun TopicRow(t: TopicCard, onClick: () -> Unit, modifier: Modifier = Modifier, p
             val img = t.images.firstOrNull()
             if (img != null && client != null) {
                 Spacer(Modifier.width(Dimens.s))
-                RemoteImage(client.fileUrl(img), Modifier.size(56.dp).clip(RoundedCornerShape(10.dp)))
+                RemoteImage(client.fileUrl(img), Modifier.size(56.dp).clip(RoundedCornerShape(10.dp)), displaySize = 56.dp)
             }
         }
         Spacer(Modifier.height(Dimens.s))
@@ -83,7 +86,7 @@ fun TopicRow(t: TopicCard, onClick: () -> Unit, modifier: Modifier = Modifier, p
 @Composable
 private fun TopicPills(t: TopicCard) {
     val pills = buildList<@Composable () -> Unit> {
-        if (t.pinned) add { Pill("سنجاق‌شده", Gold, icon = Icons.Outlined.PushPin) }
+        if (t.pinned) add { Pill("سنجاق‌شده", GoldInk, icon = Icons.Outlined.PushPin) }
         if (t.locked) add { Pill("بسته", muted(), icon = Icons.Outlined.Lock) }
         if (t.expertReplyCount > 0) add { Pill("پاسخِ متخصص", Expert, ExpertContainer, icon = VerifiedIcon) }
         else if (t.kind == "question" && t.replyCount == 0) add { Pill("در انتظارِ پاسخ", muted()) }

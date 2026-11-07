@@ -19,6 +19,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -110,7 +111,8 @@ fun SectionTitle(text: String, modifier: Modifier = Modifier, action: String? = 
         Text(text, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
         if (action != null && onAction != null) {
             Text(action, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = onAction).padding(horizontal = 6.dp, vertical = 4.dp))
+                modifier = Modifier.heightIn(min = Dimens.touch).clip(RoundedCornerShape(8.dp)).clickable(role = Role.Button, onClick = onAction)
+                    .wrapContentHeight(Alignment.CenterVertically).padding(horizontal = 8.dp))
         }
     }
 }
@@ -127,7 +129,7 @@ fun UserAvatar(name: String, photoUrl: String?, size: Dp = Dimens.avatar, anonym
     val api = if (wantsPhoto) LocalAppContainer.current.serverApi else null
     val url = photoUrl?.takeIf { wantsPhoto }?.let { p -> FileIdRe.find(p)?.groupValues?.get(1)?.let { id -> api?.fileUrl(id) } ?: p }
     Box(Modifier.size(size).clip(CircleShape).background(c.copy(alpha = 0.14f)), contentAlignment = Alignment.Center) {
-        if (url != null) RemoteImage(url, Modifier.fillMaxSize())
+        if (url != null) RemoteImage(url, Modifier.fillMaxSize(), displaySize = size)
         else if (anonymous) Icon(Icons.Outlined.PersonOff, null, tint = c, modifier = Modifier.size(size * 0.55f))
         else Text(name.trim().firstOrNull()?.toString() ?: "؟", color = c, fontWeight = FontWeight.Bold,
             style = if (size >= 40.dp) MaterialTheme.typography.titleMedium else MaterialTheme.typography.titleSmall)
@@ -137,7 +139,7 @@ fun UserAvatar(name: String, photoUrl: String?, size: Dp = Dimens.avatar, anonym
 /** Name + badge line used in topic/post headers. */
 @Composable
 fun AuthorLine(person: Person, time: String?, modifier: Modifier = Modifier, onClick: (() -> Unit)? = null, size: Dp = Dimens.avatar) {
-    Row(modifier.then(if (onClick != null && person.id.isNotEmpty()) Modifier.clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick) else Modifier),
+    Row(modifier.then(if (onClick != null && person.id.isNotEmpty()) Modifier.clip(RoundedCornerShape(10.dp)).clickable(onClickLabel = "دیدنِ پروفایل", onClick = onClick) else Modifier),
         verticalAlignment = Alignment.CenterVertically) {
         UserAvatar(person.name, person.photoUrl, size, person.anonymous)
         Spacer(Modifier.width(Dimens.s))

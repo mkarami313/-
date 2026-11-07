@@ -21,6 +21,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import com.hamraheteyf.app.community.GroupItem
 import com.hamraheteyf.app.community.rememberCommunity
 import com.hamraheteyf.app.net.ApiResult
@@ -128,6 +132,9 @@ fun GroupEditScreen(groupId: String?, onBack: () -> Unit, onSaved: (String) -> U
     var category by rememberSaveable { mutableStateOf<String?>(null) }
     var ageBand by rememberSaveable { mutableStateOf<String?>(null) }
     var loaded by rememberSaveable { mutableStateOf(!editing) }
+    // Only the owner (or a site admin) may switch public/private; a moderator's save would be refused outright.
+    var canChangeVisibility by rememberSaveable { mutableStateOf(true) }
+    var wasPrivate by rememberSaveable { mutableStateOf(false) }
     var loadError by remember { mutableStateOf<String?>(null) }
     var saving by remember { mutableStateOf(false) }
     var uploading by remember { mutableStateOf(false) }
@@ -142,8 +149,10 @@ fun GroupEditScreen(groupId: String?, onBack: () -> Unit, onSaved: (String) -> U
             when (val r = c.groupInfo(id)) {
                 is ApiResult.Ok -> r.data.group.let {
                     title = it.title; description = it.description; rules = it.rules; city = it.city.orEmpty()
-                    isPrivate = it.visibility == "PRIVATE"; coverId = it.coverId
-                    category = it.category; ageBand = it.ageBand; loaded = true
+                    isPrivate = it.visibility == "PRIVATE"; wasPrivate = isPrivate; coverId = it.coverId
+                    category = it.category; ageBand = it.ageBand
+                    canChangeVisibility = r.data.isOwner || (r.data.canManage && r.data.myRole != "MODERATOR")
+                    loaded = true
                 }
                 is ApiResult.Fail -> loadError = r.message
             }
@@ -208,7 +217,7 @@ fun GroupEditScreen(groupId: String?, onBack: () -> Unit, onSaved: (String) -> U
             return@Scaffold
         }
         Column(
-            Modifier.padding(padding).fillMaxSize().imePadding().verticalScroll(rememberScrollState())
+            Modifier.padding(padding).fillMaxSize().navigationBarsPadding().imePadding().verticalScroll(rememberScrollState())
                 .padding(horizontal = Dimens.gutter, vertical = Dimens.m),
             verticalArrangement = Arrangement.spacedBy(Dimens.m),
         ) {
@@ -236,8 +245,13 @@ fun GroupEditScreen(groupId: String?, onBack: () -> Unit, onSaved: (String) -> U
             OutlinedTextField(rules, { rules = it.take(2000); dirty = true }, Modifier.fillMaxWidth(), label = { Text("قوانینِ گروه (اختیاری)") }, minLines = 3,
                 placeholder = { Text("مثلاً: احترام، بدونِ تبلیغ، حفظِ حریمِ کودکان") })
             Text("نوعِ گروه", style = MaterialTheme.typography.labelLarge, color = muted())
-            VisibilityOption("عمومی", "همه گفتگوها را می‌بینند و هر کسی می‌تواند فوراً عضو شود.", !isPrivate) { isPrivate = false; dirty = true }
-            VisibilityOption("خصوصی", "فقط اعضا گفتگوها را می‌بینند؛ عضویت با تأییدِ مدیر است.", isPrivate) { isPrivate = true; dirty = true }
+            VisibilityOption("عمومی", "همه گفتگوها را می‌بینند و هر کسی می‌تواند فوراً عضو شود.", !isPrivate, canChangeVisibility) { isPrivate = false; dirty = true }
+            VisibilityOption("خصوصی", "فقط اعضا گفتگوها را می‌بینند؛ عضویت با تأییدِ مدیر است.", isPrivate, canChangeVisibility) { isPrivate = true; dirty = true }
+            if (!canChangeVisibility) Text("فقط سازندهٔ گروه نوعِ گروه را تغییر می‌دهد.", style = MaterialTheme.typography.labelMedium, color = muted())
+            else if (editing && wasPrivate && !isPrivate) Text(
+                "با عمومی شدن، گفتگوهای قبلی برای همه دیده می‌شود و درخواست‌های در انتظار خودکار پذیرفته می‌شوند.",
+                style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.error,
+            )
             Spacer(Modifier.height(Dimens.xl))
         }
     }
@@ -245,13 +259,14 @@ fun GroupEditScreen(groupId: String?, onBack: () -> Unit, onSaved: (String) -> U
 }
 
 @Composable
-private fun VisibilityOption(title: String, note: String, selected: Boolean, onClick: () -> Unit) {
+private fun VisibilityOption(title: String, note: String, selected: Boolean, enabled: Boolean, onClick: () -> Unit) {
     AppCard(
-        onClick = onClick,
+        Modifier.semantics { this.selected = selected; role = Role.RadioButton },
+        onClick = if (enabled) onClick else null,
         border = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            RadioButton(selected, null)
+            RadioButton(selected, null, enabled = enabled)
             Spacer(Modifier.width(Dimens.s))
             Column {
                 Text(title, style = MaterialTheme.typography.titleSmall)

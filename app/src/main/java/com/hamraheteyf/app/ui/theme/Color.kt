@@ -50,6 +50,11 @@ val ExpertContainer = Color(0xFFE3E9FF)
 val Like = Color(0xFFE03131)
 val Gold = Color(0xFFF59F00)
 
+// Text-safe (≥4.5:1 on white and on their own 12% tint) versions of the accents, for pill/label TEXT.
+// Gold and Apricot themselves are for icons, stars and fills only.
+val GoldInk = Color(0xFF8F5300)
+val ApricotInk = Color(0xFFA8461C)
+
 /** Parses a server "#RRGGBB" color; falls back to the brand teal. */
 fun hexColor(hex: String?, fallback: Color = Teal): Color =
     runCatching { if (hex.isNullOrBlank()) fallback else Color(android.graphics.Color.parseColor(hex)) }.getOrDefault(fallback)

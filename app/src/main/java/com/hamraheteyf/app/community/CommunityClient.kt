@@ -7,7 +7,12 @@ import androidx.compose.runtime.remember
 import com.hamraheteyf.app.di.LocalAppContainer
 import com.hamraheteyf.app.net.ApiResult
 import com.hamraheteyf.app.net.HamrahApi
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
@@ -521,38 +526,56 @@ class CommunityClient(val api: HamrahApi) {
         }
     }
 
-    /** Streams an mp4 from the gallery to /api/upload-video (≤250 MB) with progress 0..100. */
+    /**
+     * Streams an mp4 from the gallery to /api/upload-video (≤250 MB) with progress 0..100.
+     * Cancelling the caller really stops it: a watcher closes the connection the moment the coroutine is
+     * cancelled (a write blocked on a slow network would otherwise keep going), and the CancellationException
+     * is rethrown instead of being reported as a network failure.
+     */
     suspend fun uploadVideo(context: Context, uri: Uri, onProgress: (Int) -> Unit): ApiResult<String> = withContext(Dispatchers.IO) {
-        runCatching {
-            val cr = context.contentResolver
-            val size = cr.openFileDescriptor(uri, "r")?.use { it.statSize } ?: -1L
-            if (size <= 0) return@runCatching ApiResult.Fail("حجمِ فایل مشخص نیست.")
-            if (size > 250L * 1024 * 1024) return@runCatching ApiResult.Fail("حجمِ ویدیو باید کمتر از ۲۵۰ مگابایت باشد.")
-            val c = URL(com.hamraheteyf.app.BuildConfig.API_BASE_URL + "upload-video").openConnection() as HttpURLConnection
-            try {
-                c.requestMethod = "POST"; c.connectTimeout = 15000; c.readTimeout = 120000; c.doOutput = true
-                c.setFixedLengthStreamingMode(size)
-                c.setRequestProperty("Content-Type", "video/mp4")
-                c.setRequestProperty("X-Filename", "video.mp4")
-                api.token?.let { c.setRequestProperty("Authorization", "Bearer $it") }
-                cr.openInputStream(uri)!!.use { inp ->
-                    c.outputStream.use { out ->
-                        val buf = ByteArray(256 * 1024); var sent = 0L; var n: Int
-                        while (inp.read(buf).also { n = it } > 0) {
-                            kotlinx.coroutines.yield()  // throws on cancel, so leaving the form stops the upload
-                            out.write(buf, 0, n); sent += n
-                            onProgress(((sent * 100) / size).toInt())
-                        }
+        val cr = context.contentResolver
+        val size = runCatching { cr.openFileDescriptor(uri, "r")?.use { it.statSize } }.getOrNull() ?: -1L
+        if (size <= 0) return@withContext ApiResult.Fail("حجمِ فایل مشخص نیست.")
+        if (size > 250L * 1024 * 1024) return@withContext ApiResult.Fail("حجمِ ویدیو باید کمتر از ۲۵۰ مگابایت باشد.")
+        val c = try {
+            URL(com.hamraheteyf.app.BuildConfig.API_BASE_URL + "upload-video").openConnection() as HttpURLConnection
+        } catch (e: java.io.IOException) {
+            return@withContext ApiResult.Fail("بارگذاریِ ویدیو ممکن نشد. اتصال اینترنت را بررسی کنید.", network = true)
+        }
+        val watcher = launch(start = CoroutineStart.UNDISPATCHED) {
+            try { awaitCancellation() } finally { c.disconnect() }
+        }
+        try {
+            c.requestMethod = "POST"; c.connectTimeout = 15000; c.readTimeout = 120000; c.doOutput = true
+            c.setFixedLengthStreamingMode(size)
+            c.setRequestProperty("Content-Type", "video/mp4")
+            c.setRequestProperty("X-Filename", "video.mp4")
+            api.token?.let { c.setRequestProperty("Authorization", "Bearer $it") }
+            (cr.openInputStream(uri) ?: throw java.io.IOException("no stream")).use { inp ->
+                c.outputStream.use { out ->
+                    val buf = ByteArray(256 * 1024); var sent = 0L; var n: Int
+                    while (inp.read(buf).also { n = it } > 0) {
+                        ensureActive()
+                        out.write(buf, 0, n); sent += n
+                        onProgress(((sent * 100) / size).toInt().coerceAtMost(100))
                     }
                 }
-                val ok = c.responseCode in 200..299
-                val text = (if (ok) c.inputStream else (c.errorStream ?: c.inputStream)).bufferedReader().use(BufferedReader::readText)
-                val obj = runCatching { api.json.parseToJsonElement(text).jsonObject }.getOrNull()
-                val id = (obj?.get("file") as? JsonObject)?.get("id")?.let { (it as JsonPrimitive).content }
-                if (ok && id != null) ApiResult.Ok(id)
-                else ApiResult.Fail((obj?.get("error") as? JsonPrimitive)?.content ?: "بارگذاریِ ویدیو ناموفق بود.")
-            } finally { c.disconnect() }
-        }.getOrElse { ApiResult.Fail("بارگذاریِ ویدیو قطع شد. اتصال اینترنت را بررسی کنید.", network = true) }
+            }
+            val ok = c.responseCode in 200..299
+            val text = (if (ok) c.inputStream else (c.errorStream ?: c.inputStream)).bufferedReader().use(BufferedReader::readText)
+            val obj = runCatching { api.json.parseToJsonElement(text).jsonObject }.getOrNull()
+            val id = (obj?.get("file") as? JsonObject)?.get("id")?.let { (it as? JsonPrimitive)?.content }
+            if (ok && id != null) ApiResult.Ok(id)
+            else ApiResult.Fail((obj?.get("error") as? JsonPrimitive)?.content ?: "بارگذاریِ ویدیو ناموفق بود.")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            ensureActive()  // an IOException caused by our own disconnect-on-cancel is a cancellation, not a network error
+            ApiResult.Fail("بارگذاریِ ویدیو قطع شد. اتصال اینترنت را بررسی کنید.", network = true)
+        } finally {
+            watcher.cancel()
+            c.disconnect()
+        }
     }
 
     companion object {

@@ -25,6 +25,7 @@ import kotlinx.coroutines.launch
 private const val TITLE_MIN = 4
 private const val TITLE_MAX = 140
 private const val BODY_MIN = 5
+private const val BODY_MAX = 20_000   // server TOPIC_BODY_MAX
 
 /** New topic (in a forum or a group) or edit an existing one. [onDone] gets the topic id. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -73,18 +74,21 @@ fun TopicComposerScreen(
             when (val r = c.topic(id, 0)) {
                 is ApiResult.Ok -> {
                     val t = r.data.topic
+                    // Only the first load fills the form: after rotation/process death the restored
+                    // fields and images are the user's edits and must not be reset to the server copy.
                     if (!editLoaded) {
                         title = t.title; body = t.body; origTitle = t.title; origBody = t.body
-                        chosenForum = t.forumId; editGroup = t.groupId; editLoaded = true
+                        chosenForum = t.forumId; editGroup = t.groupId
+                        origImages = ArrayList(t.images)
+                        uploads.setExisting(t.images)
+                        editLoaded = true
                     }
-                    origImages = ArrayList(t.images)
-                    uploads.setExisting(t.images)
                 }
                 is ApiResult.Fail -> loadError = r.message
             }
         }
     }
-    LaunchedEffect(editTopicId) { if (editing) loadEdit() }
+    LaunchedEffect(editTopicId) { if (editing && !editLoaded) loadEdit() }
     // The group's name for the «در گروهِ …» line — also when editing a group topic (editGroup).
     val anyGroup = groupId ?: editGroup
     LaunchedEffect(anyGroup) {
@@ -119,7 +123,8 @@ fun TopicComposerScreen(
             bodyErr != null -> bodyErr
             uploads.busy -> "صبر کنید تا بارگذاریِ تصاویر تمام شود."
             uploads.hasFailed -> "روی تصویرِ ناموفق بزنید تا دوباره فرستاده شود، یا حذفش کنید."
-            withPoll && pollOptions.count { it.isNotBlank() } < 2 -> "نظرسنجی دست‌کم دو گزینه لازم دارد."
+            // the server drops repeated options, so «بله / بله» is one option, not two
+            withPoll && pollOptions.map { it.trim() }.filter { it.isNotEmpty() }.distinct().size < 2 -> "نظرسنجی دست‌کم دو گزینهٔ متفاوت لازم دارد."
             else -> null
         }
         if (problem != null) { scope.launch { snack.showSnackbar(problem) }; return }
@@ -132,7 +137,7 @@ fun TopicComposerScreen(
             } else c.createTopic(
                 title.trim(), body.trim(), forumId = if (groupId == null) chosenForum else null, groupId = groupId,
                 images = uploads.ids, anonymous = anonymous && groupId == null,
-                poll = if (withPoll) PollDraft(pollQ.trim(), pollOptions.map { it.trim() }.filter { it.isNotEmpty() }, pollMulti, pollDays) else null,
+                poll = if (withPoll) PollDraft(pollQ.trim(), pollOptions.map { it.trim() }.filter { it.isNotEmpty() }.distinct(), pollMulti, pollDays) else null,
             )
             when (r) {
                 is ApiResult.Ok -> { origTitle = title; origBody = body; uploads.clear(); onDone(r.data) }
@@ -162,7 +167,7 @@ fun TopicComposerScreen(
             return@Scaffold
         }
         Column(
-            Modifier.padding(padding).fillMaxSize().imePadding().verticalScroll(rememberScrollState())
+            Modifier.padding(padding).fillMaxSize().navigationBarsPadding().imePadding().verticalScroll(rememberScrollState())
                 .padding(horizontal = Dimens.gutter, vertical = Dimens.m),
             verticalArrangement = Arrangement.spacedBy(Dimens.m),
         ) {
@@ -180,7 +185,11 @@ fun TopicComposerScreen(
                     Text("تالار:", style = MaterialTheme.typography.labelLarge, color = muted())
                     Spacer(Modifier.width(Dimens.s))
                     AssistChip(
-                        onClick = { showPicker = true },
+                        onClick = {
+                            showPicker = true
+                            // the tree may have failed to load: tapping is the retry
+                            if (tree == null) client?.let { c -> scope.launch { ForumTreeCache.load(c, force = true) } }
+                        },
                         label = { Text(forum?.title ?: "انتخابِ تالار") },
                         leadingIcon = { Icon(if (forum != null) iconFor(forum.icon) else Icons.Outlined.Topic, null, Modifier.size(18.dp)) },
                         trailingIcon = { Icon(Icons.Outlined.ExpandMore, null, Modifier.size(18.dp)) },
@@ -212,7 +221,7 @@ fun TopicComposerScreen(
                 },
             )
             OutlinedTextField(
-                body, { body = it }, Modifier.fillMaxWidth().heightIn(min = 160.dp),
+                body, { body = it.take(BODY_MAX) }, Modifier.fillMaxWidth().heightIn(min = 160.dp),
                 label = { Text(if (clinic) "شرحِ کامل" else "متن") },
                 placeholder = { Text(if (clinic) "سنِ کودک، نشانه‌ها، درمان‌های فعلی و پرسشِ دقیقِ خود را بنویسید" else "تجربه، پرسش یا حرفِ خود را بنویسید") },
                 isError = tried && bodyErr != null, minLines = 6,

@@ -23,7 +23,7 @@ import com.hamraheteyf.app.ui.theme.*
 /** Cover thumbnail, or a tinted group icon when the group has none. */
 @Composable
 fun GroupThumb(coverId: String?, client: CommunityClient?, size: androidx.compose.ui.unit.Dp = 48.dp) {
-    if (coverId != null && client != null) RemoteImage(client.fileUrl(coverId), Modifier.size(size).clip(RoundedCornerShape(12.dp)))
+    if (coverId != null && client != null) RemoteImage(client.fileUrl(coverId), Modifier.size(size).clip(RoundedCornerShape(12.dp)), displaySize = size)
     else IconBadge(Icons.Outlined.Groups, Apricot, size)
 }
 
@@ -36,7 +36,7 @@ fun GroupRow(g: GroupItem, client: CommunityClient?, onClick: () -> Unit, modifi
             Spacer(Modifier.width(Dimens.m))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(g.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, maxLines = 1,
+                    Text(g.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, maxLines = 2,
                         overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                     if (g.isPrivate) { Spacer(Modifier.width(6.dp)); Pill("خصوصی", muted(), icon = Icons.Outlined.Lock) }
                 }
@@ -55,7 +55,7 @@ fun GroupRow(g: GroupItem, client: CommunityClient?, onClick: () -> Unit, modifi
                     Spacer(Modifier.weight(1f))
                     when {
                         g.isMember -> Pill(if (g.myRole == "OWNER") "سازنده" else "عضو", MaterialTheme.colorScheme.primary, icon = Icons.Outlined.Check)
-                        g.isPending -> Pill("در انتظارِ تأیید", Gold, icon = Icons.Outlined.HourglassTop)
+                        g.isPending -> Pill("در انتظارِ تأیید", GoldInk, icon = Icons.Outlined.HourglassTop)
                     }
                 }
             }
@@ -71,7 +71,7 @@ fun roleLabel(role: String?): String? = when (role) { "OWNER" -> "سازنده";
 fun MemberRow(p: Person, onClick: () -> Unit, trailing: @Composable RowScope.() -> Unit = {}) {
     Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = Dimens.cardPad), verticalAlignment = Alignment.CenterVertically) {
         AuthorLine(p, p.since?.let { "عضویت: ${com.hamraheteyf.app.ui.common.relativeTimeFa(it)}" }, Modifier.weight(1f), onClick = onClick)
-        roleLabel(p.role)?.let { Pill(it, if (p.role == "OWNER") Apricot else Expert) }
+        roleLabel(p.role)?.let { Pill(it, if (p.role == "OWNER") ApricotInk else Expert) }
         trailing()
     }
 }

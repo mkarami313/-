@@ -19,6 +19,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -80,11 +82,18 @@ class ImageUploads(private val client: CommunityClient?, private val context: Co
     }
 }
 
+/**
+ * Survives rotation and process death with the images that finished uploading (their file ids); an upload
+ * still running at that moment is dropped, as its coroutine is gone with the screen.
+ */
 @Composable
 fun rememberImageUploads(client: CommunityClient?, max: Int = 6): ImageUploads {
     val ctx = LocalContext.current.applicationContext
     val scope = rememberCoroutineScope()
-    return remember(client) { ImageUploads(client, ctx, scope, max) }
+    return rememberSaveable(client, saver = Saver(
+        save = { ArrayList(it.ids) },
+        restore = { ids -> ImageUploads(client, ctx, scope, max).apply { setExisting(ids) } },
+    )) { ImageUploads(client, ctx, scope, max) }
 }
 
 /** Returns a launcher that opens the system photo picker for up to the remaining slots. */
@@ -109,7 +118,7 @@ fun AttachmentStrip(uploads: ImageUploads, client: CommunityClient?, modifier: M
                 val shape = RoundedCornerShape(10.dp)
                 val boxMod = Modifier.fillMaxSize().clip(shape)
                 when {
-                    a.id != null && client != null -> RemoteImage(client.fileUrl(a.id), boxMod)
+                    a.id != null && client != null -> RemoteImage(client.fileUrl(a.id), boxMod, displaySize = size)
                     a.error != null -> Box(
                         boxMod.background(MaterialTheme.colorScheme.errorContainer)
                             .clickable(onClickLabel = "تلاشِ دوباره") { uploads.retry(a.key) }

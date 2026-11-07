@@ -27,6 +27,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import com.hamraheteyf.app.net.FileUrls
@@ -47,7 +50,13 @@ private fun decodeSampled(bytes: ByteArray, maxSide: Int): Bitmap? {
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
     var sample = 1
-    while (bounds.outWidth / sample > maxSide * 2 || bounds.outHeight / sample > maxSide * 2) sample *= 2
+    if (maxSide < FULL_PX) {
+        // Thumbnails are cropped to fill: keep the SHORT side at ≥ maxSide so the crop stays sharp.
+        val short = minOf(bounds.outWidth, bounds.outHeight)
+        while (short / (sample * 2) >= maxSide) sample *= 2
+    } else {
+        while (bounds.outWidth / sample > maxSide * 2 || bounds.outHeight / sample > maxSide * 2) sample *= 2
+    }
     return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
 }
 
@@ -98,17 +107,20 @@ private fun fetchBytes(url: String): Fetched = try {
 
 private val RETRY_DELAYS_MS = longArrayOf(0, 1000, 3000)
 
-/** Memory → disk → network (3 attempts with back-off). Null means it failed. */
-private suspend fun loadBitmap(ctx: Context, url: String): Bitmap? = withContext(Dispatchers.IO) {
+/** Default decode bound for content images (≤2× this per side after sampling). */
+private const val FULL_PX = 900
+
+/** Memory → disk → network (3 attempts with back-off), decoded to about [maxPx] per side. Null means it failed. */
+private suspend fun loadBitmap(ctx: Context, url: String, maxPx: Int): Bitmap? = withContext(Dispatchers.IO) {
     val key = FileUrls.cacheKey(url)
-    ImageDiskCache.get(ctx, key)?.let { b -> decodeSampled(b, 900)?.let { return@withContext it } }
+    ImageDiskCache.get(ctx, key)?.let { b -> decodeSampled(b, maxPx)?.let { return@withContext it } }
     var resigned = false
     for (d in RETRY_DELAYS_MS) {
         if (d > 0) delay(d)
         val r = fetchBytes(FileUrls.resolveUrl(url))
         val bytes = r.bytes
         if (bytes != null) {
-            val bmp = decodeSampled(bytes, 900) ?: return@withContext null
+            val bmp = decodeSampled(bytes, maxPx) ?: return@withContext null
             ImageDiskCache.put(ctx, key, bytes)
             return@withContext bmp
         }
@@ -119,7 +131,7 @@ private suspend fun loadBitmap(ctx: Context, url: String): Bitmap? = withContext
             val again = fetchBytes(FileUrls.resolveUrl(url))
             val b2 = again.bytes
             if (b2 != null) {
-                val bmp = decodeSampled(b2, 900) ?: return@withContext null
+                val bmp = decodeSampled(b2, maxPx) ?: return@withContext null
                 ImageDiskCache.put(ctx, key, b2)
                 return@withContext bmp
             }
@@ -131,18 +143,31 @@ private suspend fun loadBitmap(ctx: Context, url: String): Bitmap? = withContext
     null
 }
 
-/** Loads an image over HTTP (memory + disk cache, retry with back-off). A failed load shows a tap-to-retry placeholder. */
+/**
+ * Loads an image over HTTP (memory + disk cache, retry with back-off). A failed load shows a tap-to-retry placeholder.
+ * [displaySize] is the largest side the image is shown at (avatars, thumbnails): it is decoded near that size instead
+ * of ~1–2k px, so a list of 36dp avatars doesn't hold full-size bitmaps. Unspecified = content image (≈900px+).
+ */
 @Composable
-fun RemoteImage(url: String, modifier: Modifier = Modifier, contentScale: ContentScale = ContentScale.Crop, contentDescription: String? = null) {
+fun RemoteImage(
+    url: String,
+    modifier: Modifier = Modifier,
+    contentScale: ContentScale = ContentScale.Crop,
+    contentDescription: String? = null,
+    displaySize: Dp = Dp.Unspecified,
+) {
     val ctx = LocalContext.current.applicationContext
-    val key = FileUrls.cacheKey(url)  // a re-signed URL for the same file must not reload the image
+    val density = LocalDensity.current
+    val maxPx = if (displaySize.isSpecified) with(density) { displaySize.roundToPx() }.coerceIn(48, FULL_PX) else FULL_PX
+    // A re-signed URL for the same file must not reload the image; a thumbnail and the full view are cached apart.
+    val key = FileUrls.cacheKey(url) + "@" + maxPx
     var bmp by remember(key) { mutableStateOf(ImageCache.get(key)) }
     var failed by remember(key) { mutableStateOf(false) }
     var attempt by remember(key) { mutableIntStateOf(0) }
     LaunchedEffect(key, attempt) {
         if (bmp == null) {
             failed = false
-            val loaded = loadBitmap(ctx, url)
+            val loaded = loadBitmap(ctx, url, maxPx)
             if (loaded != null) { ImageCache.put(key, loaded); bmp = loaded } else failed = true
         }
     }

@@ -16,7 +16,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.text.font.FontWeight
@@ -46,6 +49,7 @@ fun OpeningPostCard(
     onQuote: () -> Unit,
     poll: @Composable () -> Unit,
     modifier: Modifier = Modifier,
+    canQuote: Boolean = true,
 ) {
     AppCard(modifier) {
         AuthorLine(topic.author, relativeTimeFa(topic.createdAt), onClick = { onOpenProfile(topic.author.id) })
@@ -67,10 +71,9 @@ fun OpeningPostCard(
         Spacer(Modifier.height(Dimens.s))
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         Row(verticalAlignment = Alignment.CenterVertically) {
-            LikeButton(topic.liked, topic.likeCount, enabled = !topic.mine, onClick = onLike)
-            TextButton(onClick = onQuote) {
-                Icon(Icons.Outlined.FormatQuote, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("نقلِ قول")
-            }
+            // liking your own post or anything unpublished is refused upstream
+            LikeButton(topic.liked, topic.likeCount, enabled = !topic.mine && topic.status == "PUBLISHED", onClick = onLike)
+            if (canQuote) QuoteButton(onQuote)
             Spacer(Modifier.weight(1f))
             Counter(Icons.Outlined.ChatBubbleOutline, topic.replyCount, contentDescription = "پاسخ")
             Spacer(Modifier.width(Dimens.m))
@@ -85,7 +88,7 @@ private fun TopicStatusPills(t: TopicFull) {
     if (!t.pinned && !t.locked && t.expertReplyCount == 0 && t.status == "PUBLISHED") return
     Spacer(Modifier.height(6.dp))
     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        if (t.pinned) Pill("سنجاق‌شده", Gold, icon = Icons.Outlined.PushPin)
+        if (t.pinned) Pill("سنجاق‌شده", GoldInk, icon = Icons.Outlined.PushPin)
         if (t.locked) Pill("بسته", muted(), icon = Icons.Outlined.Lock)
         if (t.expertReplyCount > 0) Pill("پاسخِ متخصص", Expert, ExpertContainer, icon = VerifiedIcon)
         if (t.status == "PENDING") Pill("در انتظارِ بررسی", muted())
@@ -104,6 +107,7 @@ fun LikeButton(liked: Boolean, count: Int, enabled: Boolean, onClick: () -> Unit
 }
 
 /** One reply. Expert replies carry a blue stripe on the start edge; the accepted one a green pill. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun PostCard(
     post: ForumPost,
@@ -118,10 +122,14 @@ fun PostCard(
     onDelete: () -> Unit,
     onReport: () -> Unit,
     modifier: Modifier = Modifier,
+    canQuote: Boolean = true,
 ) {
     val stripe = if (post.expert) Expert else if (post.accepted) VerifiedGreen else null
     AppCard(
-        modifier.then(if (stripe != null) Modifier.clip(MaterialTheme.shapes.medium).drawBehind {
+        // drawWithContent, not drawBehind: the card's Surface paints an opaque background over anything
+        // drawn behind it, which made the expert/accepted stripe invisible.
+        modifier.then(if (stripe != null) Modifier.clip(MaterialTheme.shapes.medium).drawWithContent {
+            drawContent()
             val w = 4.dp.toPx()
             val x = if (layoutDirection == LayoutDirection.Rtl) size.width - w else 0f
             drawRect(stripe, Offset(x, 0f), Size(w, size.height))
@@ -134,7 +142,7 @@ fun PostCard(
         }
         if (post.expert || post.accepted || post.status != "PUBLISHED") {
             Spacer(Modifier.height(6.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (post.accepted) Pill("بهترین پاسخ", VerifiedGreen, icon = Icons.Outlined.CheckCircle)
                 if (post.expert) Pill("پاسخِ متخصص", Expert, ExpertContainer, icon = VerifiedIcon)
                 if (post.status == "PENDING") Pill("در انتظارِ بررسی", muted())
@@ -151,10 +159,10 @@ fun PostCard(
             Text("ویرایش‌شده", style = MaterialTheme.typography.labelSmall, color = muted())
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            LikeButton(post.liked, post.likeCount, enabled = !post.mine, onClick = onLike)
-            TextButton(onClick = onQuote) {
-                Icon(Icons.Outlined.FormatQuote, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("نقلِ قول")
-            }
+            val published = post.status == "PUBLISHED"
+            LikeButton(post.liked, post.likeCount, enabled = !post.mine && published, onClick = onLike)
+            // a quote of a reply that isn't published is silently dropped upstream
+            if (canQuote && published) QuoteButton(onQuote)
             if (canAccept && !post.mine && post.status == "PUBLISHED") {
                 TextButton(onClick = onAccept, colors = ButtonDefaults.textButtonColors(contentColor = VerifiedGreen)) {
                     Icon(if (post.accepted) Icons.Outlined.RemoveDone else Icons.Outlined.Done, null, Modifier.size(18.dp))
@@ -165,6 +173,13 @@ fun PostCard(
             Spacer(Modifier.weight(1f))
             PostMenu(post.canEdit, post.canDelete, !post.mine, onEdit, onDelete, onReport)
         }
+    }
+}
+
+@Composable
+private fun QuoteButton(onClick: () -> Unit) {
+    TextButton(onClick = onClick) {
+        Icon(Icons.Outlined.FormatQuote, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("نقلِ قول")
     }
 }
 
@@ -200,10 +215,13 @@ fun QuoteBlock(q: QuoteRef, modifier: Modifier = Modifier) {
 
 /** Poll with result bars; vote controls while it is open and the user hasn't voted (or chose «تغییرِ رأی»). */
 @Composable
-fun PollCard(poll: Poll, busy: Boolean, onVote: (List<Int>) -> Unit) {
+fun PollCard(poll: Poll, busy: Boolean, locked: Boolean = false, onVote: (List<Int>) -> Unit) {
     var changing by rememberSaveable { mutableStateOf(false) }
+    // Leave «تغییرِ رأی» only once the new vote is in; a failed vote keeps the choices open for another try.
+    LaunchedEffect(poll.myVotes) { changing = false }
     val voted = poll.myVotes.isNotEmpty()
-    val voting = !poll.closed && (!voted || changing)
+    val closed = poll.closed || locked  // votes in a locked topic are refused too
+    val voting = !closed && (!voted || changing)
     var picked by remember(poll.myVotes) { mutableStateOf(poll.myVotes.toSet()) }
     val base = (if (poll.multi) poll.voters else poll.counts.sum()).coerceAtLeast(1)
     Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)) {
@@ -219,9 +237,10 @@ fun PollCard(poll: Poll, busy: Boolean, onVote: (List<Int>) -> Unit) {
                 if (voting) {
                     val sel = i in picked
                     Row(
-                        Modifier.fillMaxWidth().heightIn(min = 44.dp).clip(RoundedCornerShape(8.dp)).clickable {
-                            picked = if (poll.multi) (if (sel) picked - i else picked + i) else setOf(i)
-                        },
+                        Modifier.fillMaxWidth().heightIn(min = 44.dp).clip(RoundedCornerShape(8.dp)).then(
+                            if (poll.multi) Modifier.toggleable(sel, role = Role.Checkbox) { picked = if (sel) picked - i else picked + i }
+                            else Modifier.selectable(sel, role = Role.RadioButton) { picked = setOf(i) },
+                        ),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         if (poll.multi) Checkbox(sel, null) else RadioButton(sel, null)
@@ -250,16 +269,16 @@ fun PollCard(poll: Poll, busy: Boolean, onVote: (List<Int>) -> Unit) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 val meta = buildList {
                     add("${poll.voters.toPersianDigits()} شرکت‌کننده")
-                    if (poll.closed) add("پایان‌یافته")
+                    if (closed) add("پایان‌یافته")
                     else poll.closesAt?.let { add("پایان: ${remainingFa(it)}") }
                 }.joinToString(" · ")
                 Text(meta, style = MaterialTheme.typography.labelSmall, color = muted(), modifier = Modifier.weight(1f))
                 if (voting) {
                     if (changing) TextButton(onClick = { changing = false; picked = poll.myVotes.toSet() }) { Text("انصراف") }
-                    Button(onClick = { onVote(picked.sorted()); changing = false }, enabled = picked.isNotEmpty() && !busy) {
+                    Button(onClick = { onVote(picked.sorted()) }, enabled = picked.isNotEmpty() && !busy) {
                         if (busy) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp) else Text("ثبتِ رأی")
                     }
-                } else if (!poll.closed && voted) {
+                } else if (!closed && voted) {
                     TextButton(onClick = { changing = true }) { Text("تغییرِ رأی") }
                 }
             }
