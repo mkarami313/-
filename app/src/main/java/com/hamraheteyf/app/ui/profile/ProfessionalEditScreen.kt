@@ -35,14 +35,14 @@ fun ProfessionalEditScreen(onBack: () -> Unit) {
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(message) { message?.let { snackbar.showSnackbar(it); vm.clearMessage() } }
 
-    var title by remember(prof) { mutableStateOf(prof?.title ?: "") }
-    var areas by remember(prof) { mutableStateOf(prof?.workAreas?.joinToString("، ") ?: "") }
-    var online by remember(prof) { mutableStateOf(prof?.offersOnline ?: false) }
-    var experience by remember(prof) { mutableStateOf(prof?.experience ?: "") }
-    var fee by remember(prof) { mutableStateOf(prof?.fee ?: "") }
-    var hours by remember(prof) { mutableStateOf(prof?.hours ?: "") }
-    var photoId by remember(prof) { mutableStateOf(prof?.photoId.orEmpty()) }
-    var newPhoto by remember(prof) { mutableStateOf<ByteArray?>(null) }
+    var title by remember(prof?.userId) { mutableStateOf(prof?.title ?: "") }
+    var areas by remember(prof?.userId) { mutableStateOf(prof?.workAreas?.joinToString("، ") ?: "") }
+    var online by remember(prof?.userId) { mutableStateOf(prof?.offersOnline ?: false) }
+    var experience by remember(prof?.userId) { mutableStateOf(prof?.experience ?: "") }
+    var fee by remember(prof?.userId) { mutableStateOf(prof?.fee ?: "") }
+    var hours by remember(prof?.userId) { mutableStateOf(prof?.hours ?: "") }
+    var photoId by remember(prof?.userId) { mutableStateOf(prof?.photoId.orEmpty()) }
+    var newPhoto by remember(prof?.userId) { mutableStateOf<ByteArray?>(null) }
     var busy by remember { mutableStateOf(false) }
     var photoError by remember { mutableStateOf<String?>(null) }
 
@@ -117,11 +117,13 @@ fun ProfessionalEditScreen(onBack: () -> Unit) {
                         val api = container.serverApi
                         if (api == null) { photoError = "بارگذاری عکس در حالت آفلاین ممکن نیست."; busy = false; return@launch }
                         when (val r = api.uploadImageId(b)) {
-                            is ApiResult.Ok -> pid = r.data
+                            is ApiResult.Ok -> { pid = r.data; photoId = r.data; newPhoto = null }  // a second save must not re-upload
                             is ApiResult.Fail -> { photoError = r.message; busy = false; return@launch }
                         }
                     }
-                    vm.upsertProfessional(title.trim(), areaList.distinct(), if (me?.privacy?.showCity == true) me?.city.orEmpty().take(60) else "", online, experience.trim(), pid.ifBlank { null }, fee.trim(), hours.trim())
+                    vm.upsertProfessional(title.trim(), areaList.distinct(), if (me?.privacy?.showCity == true) me?.city.orEmpty().take(60) else "", online, experience.trim(), 
+                        // The server keeps the photo on null and clears it only on "": «حذف» used to do nothing.
+                        if (pid.isBlank() && !prof?.photoId.isNullOrBlank()) "" else pid.ifBlank { null }, fee.trim(), hours.trim())
                     busy = false
                 }
             })

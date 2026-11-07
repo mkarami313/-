@@ -54,6 +54,18 @@ private fun JsonObject.str(k: String): String = (this[k] as? JsonPrimitive)?.con
 private fun JsonObject.lng(k: String): Long = (this[k] as? JsonPrimitive)?.longOrNull ?: 0L
 private fun JsonObject.bool(k: String): Boolean = (this[k] as? JsonPrimitive)?.booleanOrNull ?: false
 
+/**
+ * Today's LOCAL calendar date as UTC midnight — the form [isoDay] and the DatePicker use. Using "now" directly
+ * made the default report end yesterday between 00:00 and 03:30 Iran time, dropping today's records.
+ */
+internal fun localTodayAsUtcMidnight(nowMs: Long = System.currentTimeMillis(), tz: TimeZone = TimeZone.getDefault()): Long {
+    val local = java.util.Calendar.getInstance(tz).apply { timeInMillis = nowMs }
+    return java.util.Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
+        clear()
+        set(local.get(java.util.Calendar.YEAR), local.get(java.util.Calendar.MONTH), local.get(java.util.Calendar.DAY_OF_MONTH))
+    }.timeInMillis
+}
+
 /** Server timestamps may be epoch seconds or milliseconds. */
 private fun toMillis(v: Long): Long = if (v in 1..99_999_999_999L) v * 1000 else v
 
@@ -138,8 +150,8 @@ fun PdfExportBlock(childId: String, childName: String, shareId: String? = null) 
     DisposableEffect(Unit) { onDispose { printer.release() } }
 
     val day = 86_400_000L
-    var fromMs by rememberSaveable { mutableLongStateOf(System.currentTimeMillis() - 30 * day) }
-    var toMs by rememberSaveable { mutableLongStateOf(System.currentTimeMillis()) }
+    var fromMs by rememberSaveable { mutableLongStateOf(localTodayAsUtcMidnight() - 30 * day) }
+    var toMs by rememberSaveable { mutableLongStateOf(localTodayAsUtcMidnight()) }
     var picking by rememberSaveable { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -367,7 +379,7 @@ fun SharesReceivedScreen(onBack: () -> Unit, onOpen: (String) -> Unit) {
             InfoBanner("اگر خانواده‌ای کد اشتراک پروندهٔ کودکش را به شما داده، آن را اینجا وارد کنید. دسترسی فقط خواندنی و موقت است.", dismissKey = "shares_received_info")
             Spacer(Modifier.height(12.dp))
             OutlinedTextField(
-                value = code, onValueChange = { code = it.trim() }, singleLine = true,
+                value = code, onValueChange = { code = ReminderTimes.digits(it).trim() }, singleLine = true,  // a Persian-digit code was always "invalid" (and burnt a redeem attempt)
                 label = { Text("کد اشتراک") }, modifier = Modifier.fillMaxWidth(),
                 keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Ascii),
             )

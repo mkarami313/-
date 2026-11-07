@@ -41,7 +41,18 @@ fun unreadByConversation(repo: ConversationRepository, me: Flow<String?>): Flow<
 fun rememberUnreadConversationCount(): State<Int> {
     val c = LocalAppContainer.current
     val flow = remember(c) {
-        unreadByConversation(c.conversationRepository, c.authRepository.currentUserId).map { m -> m.values.count { it > 0 } }
+        // Conversations with a blocked user are hidden from the list, so their unread messages must not light a
+        // badge the user can never clear.
+        combine(
+            unreadByConversation(c.conversationRepository, c.authRepository.currentUserId),
+            c.conversationRepository.observeConversations(),
+            c.userRepository.observeCurrentUser(),
+        ) { m, convs, me ->
+            val blocked = me?.blockedUserIds.orEmpty()
+            val hidden = if (blocked.isEmpty()) emptySet()
+            else convs.filter { cv -> cv.participantIds.any { it != me?.id && it in blocked } }.map { it.id }.toSet()
+            m.count { (id, n) -> n > 0 && id !in hidden }
+        }
     }
     return flow.collectAsState(0)
 }

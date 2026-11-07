@@ -22,6 +22,7 @@ import kotlinx.serialization.json.put
 @Composable
 fun ResetPasswordScreen(onBack: () -> Unit, initialEmail: String = "") {
     val scope = rememberCoroutineScope()
+    val vault = com.hamraheteyf.app.security.LocalCredentialVault.current
     var step by rememberSaveable { mutableIntStateOf(1) }
     var email by rememberSaveable { mutableStateOf(initialEmail) }
     var code by rememberSaveable { mutableStateOf("") }
@@ -93,7 +94,11 @@ fun ResetPasswordScreen(onBack: () -> Unit, initialEmail: String = "") {
                                 buildJsonObject { put("email", email); put("code", code); put("newPassword", pass) }.toString(),
                             )
                             busy = false
-                            if (r.ok) done = true else error = r.error
+                            if (r.ok) {
+                                done = true
+                                // The fingerprint sign-in still holds the old password: it would fail on every launch.
+                                if (vault.savedEmail().equals(email, ignoreCase = true)) runCatching { vault.clear() }
+                            } else error = r.error
                         }
                     },
                 )

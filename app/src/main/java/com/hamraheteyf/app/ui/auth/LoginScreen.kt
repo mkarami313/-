@@ -54,13 +54,14 @@ fun LoginScreen(onGoToRegister: () -> Unit, onGoToReset: (String) -> Unit = {}, 
                 val creds = vault.load()
                 if (creds != null) {
                     email = creds.first
-                    vm.login(creds.first, creds.second, remember = true)
+                    vm.login(creds.first, creds.second, remember = true, fromBiometric = true)
                 } else {
                     vault.clear(); hasSaved = false
                     bioError = "خواندن مشخصات ذخیره‌شده ممکن نشد؛ لطفاً با رمز وارد شوید."
                 }
             },
-            onError = { bioError = it },
+            // An invalidated key (new fingerprint enrolled) clears the vault: hide the button with it.
+            onError = { bioError = it; hasSaved = vault.hasCredentials() },
         )
     }
 

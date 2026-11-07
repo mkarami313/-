@@ -15,6 +15,17 @@ fun UpdateDialog(info: UpdateInfo, onDismiss: () -> Unit) {
     val ctx = LocalContext.current; val scope = rememberCoroutineScope()
     var progress by remember { mutableIntStateOf(-1) }
     var error by remember { mutableStateOf<String?>(null) }
+    // A finished download waiting for the user: Android blocks starting the installer while the app is in the
+    // background, so a download that finished after the user switched away used to vanish silently.
+    var ready by remember { mutableStateOf<java.io.File?>(null) }
+    @Suppress("DEPRECATION")
+    val lifecycle = androidx.compose.ui.platform.LocalLifecycleOwner.current.lifecycle
+    fun tryInstall(f: java.io.File) {
+        if (!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) { ready = f; return }
+        runCatching { AppUpdater.install(ctx, f) }
+            .onSuccess { onDismiss() }
+            .onFailure { ready = f; error = "نصب‌کنندهٔ گوشی باز نشد؛ دوباره «نصب» را بزنید." }
+    }
     AlertDialog(
         onDismissRequest = { if (progress < 0) onDismiss() },
         title = { Text("نسخهٔ ${info.versionName.toPersianDigits()} آماده است") },
@@ -26,7 +37,9 @@ fun UpdateDialog(info: UpdateInfo, onDismiss: () -> Unit) {
             }
         },
         confirmButton = {
-            TextButton(enabled = progress < 0, onClick = {
+            val pending = ready
+            if (pending != null && progress < 0) TextButton(onClick = { error = null; ready = null; tryInstall(pending) }) { Text("نصب") }
+            else TextButton(enabled = progress < 0, onClick = {
                 if (!AppUpdater.canInstall(ctx)) {
                     error = if (AppUpdater.openInstallPermission(ctx)) "اجازهٔ نصب از این برنامه را روشن کنید و دوباره بزنید."
                     else "از تنظیماتِ گوشی، «نصب برنامه‌های ناشناس» را برای همراهِ طیف روشن کنید و دوباره بزنید."
@@ -34,8 +47,18 @@ fun UpdateDialog(info: UpdateInfo, onDismiss: () -> Unit) {
                 }
                 error = null; progress = 0
                 scope.launch {
-                    try { AppUpdater.install(ctx, AppUpdater.download(ctx, info) { progress = it }); onDismiss() }
-                    catch (e: Exception) { error = e.message ?: "دانلود ناموفق بود."; progress = -1 }
+                    try {
+                        val f = AppUpdater.download(ctx, info) { progress = it }
+                        progress = -1
+                        tryInstall(f)
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (e: IllegalStateException) {
+                        error = e.message ?: "دانلود ناموفق بود."; progress = -1
+                    } catch (e: Exception) {
+                        // IOException messages are English internals («timeout», «Unable to resolve host…»).
+                        error = "دانلود ناموفق بود. اتصال اینترنت را بررسی کنید و دوباره تلاش کنید."; progress = -1
+                    }
                 }
             }) { Text("دانلود و نصب") }
         },

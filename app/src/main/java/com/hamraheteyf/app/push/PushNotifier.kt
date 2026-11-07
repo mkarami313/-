@@ -47,6 +47,7 @@ object PushNotifier {
             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         if (!type.isNullOrBlank()) open.putExtra(PendingDeepLink.EXTRA_TYPE, type)
         if (!relatedId.isNullOrBlank()) open.putExtra(PendingDeepLink.EXTRA_RELATED, relatedId)
+        open.putExtra(PendingDeepLink.EXTRA_NOTIF_ID, notifId)
         val tap = PendingIntent.getActivity(
             context, notifId.hashCode(), open,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,

@@ -46,8 +46,14 @@ fun SettingsScreen(onBack: () -> Unit) {
     var showDelete by remember { mutableStateOf(false) }
     var showPassword by remember { mutableStateOf(false) }
 
-    val privacy = user?.privacy ?: PrivacySettings()
-    val notif = user?.notificationSettings ?: NotificationSettings()
+    // Optimistic local copies (re-seeded whenever the server's value changes): each toggle used to send
+    // `copy(x)` of the last SNAPSHOT, so two quick toggles sent stale values and the second undid the first.
+    val serverPrivacy = user?.privacy ?: PrivacySettings()
+    val serverNotif = user?.notificationSettings ?: NotificationSettings()
+    var privacy by remember(serverPrivacy) { mutableStateOf(serverPrivacy) }
+    var notif by remember(serverNotif) { mutableStateOf(serverNotif) }
+    fun setPrivacy(p: PrivacySettings) { privacy = p; vm.updatePrivacy(p) }
+    fun setNotif(n: NotificationSettings) { notif = n; vm.updateNotificationSettings(n) }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
@@ -57,17 +63,17 @@ fun SettingsScreen(onBack: () -> Unit) {
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
             SectionTitle("نمایش و حریم خصوصی")
-            ToggleRow("نمایش شهر در پروفایل", privacy.showCity) { vm.updatePrivacy(privacy.copy(showCity = it)) }
-            ToggleRow("نمایش معرفی در پروفایل", privacy.showBio) { vm.updatePrivacy(privacy.copy(showBio = it)) }
-            ToggleRow("دریافت درخواست گفتگو", privacy.allowMessageRequests) { vm.updatePrivacy(privacy.copy(allowMessageRequests = it)) }
+            ToggleRow("نمایش شهر در پروفایل", privacy.showCity) { setPrivacy(privacy.copy(showCity = it)) }
+            ToggleRow("نمایش معرفی در پروفایل", privacy.showBio) { setPrivacy(privacy.copy(showBio = it)) }
+            ToggleRow("دریافت درخواست گفتگو", privacy.allowMessageRequests) { setPrivacy(privacy.copy(allowMessageRequests = it)) }
 
             SectionTitle("اعلان‌ها")
-            ToggleRow("پاسخ به پرسش", notif.questionAnswered) { vm.updateNotificationSettings(notif.copy(questionAnswered = it)) }
-            ToggleRow("پیام جدید", notif.newMessage) { vm.updateNotificationSettings(notif.copy(newMessage = it)) }
-            ToggleRow("درخواست عضویت در گروه", notif.groupJoinRequest) { vm.updateNotificationSettings(notif.copy(groupJoinRequest = it)) }
-            ToggleRow("پاسخ در گروه", notif.groupReply) { vm.updateNotificationSettings(notif.copy(groupReply = it)) }
-            ToggleRow("نتیجهٔ بررسی تخصص", notif.verificationResult) { vm.updateNotificationSettings(notif.copy(verificationResult = it)) }
-            ToggleRow("اطلاعیهٔ ایمنی و تغییر قوانین", notif.safetyNotice) { vm.updateNotificationSettings(notif.copy(safetyNotice = it)) }
+            ToggleRow("پاسخ به پرسش", notif.questionAnswered) { setNotif(notif.copy(questionAnswered = it)) }
+            ToggleRow("پیام جدید", notif.newMessage) { setNotif(notif.copy(newMessage = it)) }
+            ToggleRow("درخواست عضویت در گروه", notif.groupJoinRequest) { setNotif(notif.copy(groupJoinRequest = it)) }
+            ToggleRow("پاسخ در گروه", notif.groupReply) { setNotif(notif.copy(groupReply = it)) }
+            ToggleRow("نتیجهٔ بررسی تخصص", notif.verificationResult) { setNotif(notif.copy(verificationResult = it)) }
+            ToggleRow("اطلاعیهٔ ایمنی و تغییر قوانین", notif.safetyNotice) { setNotif(notif.copy(safetyNotice = it)) }
             Text(
                 "در اعلان گوشی، محتوای حساس نمایش داده نمی‌شود و فقط عبارتی مانند «پیام جدید دارید» دیده می‌شود.",
                 style = MaterialTheme.typography.labelMedium, color = mutedColor(),
@@ -103,7 +109,15 @@ fun SettingsScreen(onBack: () -> Unit) {
     }
 
     if (showDelete) {
-        DeleteAccountDialog(busy, onDismiss = { showDelete = false }) { pw, report -> vm.deleteAccount(pw, report) }
+        val vault = com.hamraheteyf.app.security.LocalCredentialVault.current
+        val email = user?.email
+        DeleteAccountDialog(busy, onDismiss = { showDelete = false }) { pw, report ->
+            vm.deleteAccount(pw) { err ->
+                // The account is gone: its saved fingerprint sign-in would only fail on every launch.
+                if (err == null && email != null && vault.savedEmail().equals(email, ignoreCase = true)) runCatching { vault.clear() }
+                report(err)
+            }
+        }
     }
     if (showPassword) {
         val vault = com.hamraheteyf.app.security.LocalCredentialVault.current
@@ -112,7 +126,9 @@ fun SettingsScreen(onBack: () -> Unit) {
                 // The fingerprint sign-in still holds the OLD password: re-save it, or the next biometric login fails.
                 val email = user?.email
                 if (err == null && email != null && vault.hasCredentials() && vault.savedEmail().equals(email, ignoreCase = true)) {
-                    runCatching { vault.save(vault.savedEmail() ?: email, new) }
+                    val saveAs = vault.savedEmail() ?: email
+                    // Off the main thread: a save generates a fresh Keystore key.
+                    Thread { runCatching { vault.save(saveAs, new) } }.start()
                 }
                 report(err)
             }

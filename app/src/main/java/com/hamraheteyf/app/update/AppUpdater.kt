@@ -92,9 +92,21 @@ object AppUpdater {
         UpdateRules.sameApp(ctx.packageName, archive.packageName, certs(installed), certs(archive))
     }.getOrDefault(true) // unreadable archive: the SHA-256 gate already passed, and the OS installer re-checks signatures
 
+    /**
+     * The package's signing certs INCLUDING its rotation history (APK v3 key rotation). apkContentsSigners alone is
+     * only the current key: a phone on a pre-rotation build has the old key there, the rotated APK the new one, so
+     * the sets never overlapped and every such user was told the update «isn't for this app».
+     */
     @Suppress("DEPRECATION")
     private fun certs(p: PackageInfo): Set<String> {
-        val sigs = if (Build.VERSION.SDK_INT >= 28) p.signingInfo?.apkContentsSigners else p.signatures
+        val sigs = if (Build.VERSION.SDK_INT >= 28) {
+            val si = p.signingInfo
+            when {
+                si == null -> null
+                si.hasMultipleSigners() -> si.apkContentsSigners
+                else -> si.signingCertificateHistory ?: si.apkContentsSigners
+            }
+        } else p.signatures
         return sigs.orEmpty().map { MessageDigest.getInstance("SHA-256").digest(it.toByteArray()).joinToString("") { b -> "%02x".format(b) } }.toSet()
     }
 

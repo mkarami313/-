@@ -120,7 +120,8 @@ class ConversationViewModel(
         if (newest != null && conv.readAt.isNotEmpty() && newest.createdAt <= seen) { lastMarked = marker; return }
         lastMarked = marker
         val repo = convRepo as? ServerConversationRepository ?: return
-        viewModelScope.launch { repo.markConversationRead(conversationId) }
+        // A failed call (offline) must be retried on the next chance, not remembered as done.
+        viewModelScope.launch { if (repo.markConversationRead(conversationId) is DataResult.Error && lastMarked == marker) lastMarked = null }
     }
 
     fun blockOther() {

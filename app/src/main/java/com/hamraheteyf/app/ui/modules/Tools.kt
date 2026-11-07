@@ -32,11 +32,21 @@ import kotlinx.coroutines.launch
 import java.util.Locale
 
 private object Done {
-    fun key(id: String) = "s_${id}_${System.currentTimeMillis() / 86_400_000L}"
+    /** LOCAL day number (a UTC day reset the checklist at 03:30 Iran time and counted after-midnight ticks to yesterday). */
+    private fun localDay(): Long {
+        val now = System.currentTimeMillis()
+        return (now + java.util.TimeZone.getDefault().getOffset(now)) / 86_400_000L
+    }
+    fun key(id: String) = "s_${id}_${localDay()}"
     fun get(c: android.content.Context, k: String) = c.getSharedPreferences("hamrah_done", 0).getStringSet(k, emptySet()).orEmpty()
     fun toggle(c: android.content.Context, k: String, i: String) {
+        val p = c.getSharedPreferences("hamrah_done", 0)
         val s = get(c, k).toMutableSet(); if (!s.add(i)) s.remove(i)
-        c.getSharedPreferences("hamrah_done", 0).edit().putStringSet(k, s).apply()
+        // Earlier days' ticks are never read again: drop them instead of growing the file forever.
+        val today = "_${localDay()}"
+        val e = p.edit()
+        p.all.keys.filter { it.startsWith("s_") && !it.endsWith(today) }.forEach { e.remove(it) }
+        e.putStringSet(k, s).apply()
     }
 }
 

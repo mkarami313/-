@@ -259,11 +259,18 @@ class ServerStore(val api: HamrahApi, private val context: android.content.Conte
     }
 
     /** Runs a server action, applies the returned snapshot, and surfaces its `data` object. */
-    suspend fun act(name: String, argsJson: String): DataResult<JsonElement?> =
-        when (val r = api.action(name, argsJson)) {
+    suspend fun act(name: String, argsJson: String): DataResult<JsonElement?> {
+        val sentToken = api.token
+        return when (val r = api.action(name, argsJson)) {
             is ApiResult.Ok -> {
-                synchronized(this) {
-                    r.data.state?.let { applyState(it, r.data.etag, r.data.stateRaw) }
+                // Off the caller's (usually main) thread: applyState also rewrites the on-disk snapshot.
+                // And never resurrect a signed-out (or switched) account's data from a reply that landed late.
+                r.data.state?.let { st ->
+                    kotlinx.coroutines.withContext(Dispatchers.IO) {
+                        synchronized(this@ServerStore) {
+                            if (api.token != null && api.token == sentToken) applyState(st, r.data.etag, r.data.stateRaw)
+                        }
+                    }
                 }
                 _offline.value = false
                 DataResult.Success(r.data.data)
@@ -275,6 +282,7 @@ class ServerStore(val api: HamrahApi, private val context: android.content.Conte
                 else DataResult.Error(r.message)
             }
         }
+    }
 
     /** Action that only reports success/failure (the common case). */
     suspend fun actUnit(name: String, argsJson: String): DataResult<Unit> =

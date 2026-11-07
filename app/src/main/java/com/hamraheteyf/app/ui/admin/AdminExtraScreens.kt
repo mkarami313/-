@@ -46,12 +46,16 @@ fun AdminModulesTab(onMessage: (String) -> Unit) {
     val call = rememberPlatformCall()
     val scope = rememberCoroutineScope()
     val disabled by FeatureFlags.disabled.collectAsState()
+    val ctx = LocalContext.current
     var roles by remember { mutableStateOf<Map<String, List<String>>?>(null) }
     var editing by remember { mutableStateOf<Pair<String, String>?>(null) }
     LaunchedEffect(call) {
         val r = call?.call("adminStats")
         if (r is ApiResult.Ok) {
-            roles = r.data["moduleRoles"]?.jsonObject?.mapValues { e -> e.value.jsonArray.map { it.jsonPrimitive.content } }
+            // Shape-tolerant: a throwing .jsonObject/.jsonArray inside LaunchedEffect crashes the whole app.
+            roles = (r.data["moduleRoles"] as? JsonObject)?.mapValues { e ->
+                (e.value as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty()
+            }
         }
     }
     val mods = AppFeatures.all.filter { it.id !in CoreIds }
@@ -73,6 +77,12 @@ fun AdminModulesTab(onMessage: (String) -> Unit) {
                     Switch(checked = on, onCheckedChange = { v ->
                         scope.launch {
                             val res = call?.call("setFeatureEnabled", buildJsonObject { put("id", f.id); put("enabled", v) })
+                            // The switch reads FeatureFlags, which only the periodic sync updated: it snapped back
+                            // after a successful toggle, so the admin thought it had failed.
+                            if (res is ApiResult.Ok) {
+                                val cur = FeatureFlags.disabled.value
+                                FeatureFlags.update(ctx, if (v) cur - f.id else cur + f.id)
+                            }
                             onMessage(if (res is ApiResult.Fail) res.message else if (v) "«${f.title}» روشن شد." else "«${f.title}» خاموش شد.")
                         }
                     })
@@ -215,7 +225,7 @@ fun AdminUsersTab(onMessage: (String) -> Unit) {
         err = null
         users = null
         when (val r = call?.call("adminListUsers", args(0))) {
-            is ApiResult.Ok -> { users = r.data["items"]?.jsonArray?.map { it.jsonObject }.orEmpty(); total = r.data.n("total") }
+            is ApiResult.Ok -> { users = (r.data["items"] as? JsonArray)?.mapNotNull { it as? JsonObject }.orEmpty(); total = r.data.n("total") }
             is ApiResult.Fail -> err = r.message
             null -> err = "در حالت آفلاین در دسترس نیست."
         }
@@ -267,10 +277,12 @@ fun AdminUsersTab(onMessage: (String) -> Unit) {
                     enabled = !loadingMore, modifier = Modifier.fillMaxWidth(),
                     onClick = {
                         loadingMore = true
+                        val key = Triple(query, statusFilter, typeFilter)
                         scope.launch {
                             when (val r = call?.call("adminListUsers", args(list.size))) {
-                                is ApiResult.Ok -> {
-                                    val more = r.data["items"]?.jsonArray?.map { it.jsonObject }.orEmpty()
+                                is ApiResult.Ok -> if (key == Triple(query, statusFilter, typeFilter) && users === list) {
+                                    // Only append to the list this page was asked for (not to a newer search's results).
+                                    val more = (r.data["items"] as? JsonArray)?.mapNotNull { it as? JsonObject }.orEmpty()
                                     val seen = list.map { it.s("id") }.toSet()
                                     users = list + more.filter { it.s("id") !in seen }
                                     total = r.data.n("total")

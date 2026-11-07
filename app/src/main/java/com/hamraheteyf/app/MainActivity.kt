@@ -45,7 +45,11 @@ class MainActivity : FragmentActivity() {
         PushNotifier.ensureChannel(this)
         maybeRequestNotificationPermission()
         // Opened from a notification tap: remember where to go (once; not again on rotation).
-        if (savedInstanceState == null) PendingDeepLink.offer(intent)
+        // Relaunching from Recents re-delivers the task's ORIGINAL intent (extras and all — the removeExtra
+        // below only touched the in-memory copy), which re-opened an old notification's target every time.
+        if (savedInstanceState == null &&
+            (intent?.flags ?: 0) and android.content.Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY == 0
+        ) PendingDeepLink.offer(intent)
         val container = (application as HamrahApplication).container
         val vault = CredentialVault(this)
         setContent {

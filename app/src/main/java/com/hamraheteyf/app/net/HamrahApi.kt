@@ -159,8 +159,10 @@ class HamrahApi(context: Context) {
                 c.outputStream.use { it.write(bodyJson.toByteArray(Charsets.UTF_8)) }
             }
             val code = c.responseCode
-            val stream = if (code in 200..299) c.inputStream else (c.errorStream ?: c.inputStream)
-            val text = stream.bufferedReader(Charsets.UTF_8).use(BufferedReader::readText)
+            // An error reply without a body (e.g. a bare 401 from a proxy) has no errorStream, and reading
+            // inputStream then throws — which used to turn "session expired" into a fake network error.
+            val text = if (code in 200..299) c.inputStream.bufferedReader(Charsets.UTF_8).use(BufferedReader::readText)
+            else runCatching { c.errorStream?.bufferedReader(Charsets.UTF_8)?.use(BufferedReader::readText) }.getOrNull().orEmpty()
             Raw(code, text)
         } finally {
             c.disconnect()
@@ -181,9 +183,11 @@ class HamrahApi(context: Context) {
                 val obj = parse(raw.body)
                 val token = obj?.get("token")?.jsonPrimitive?.contentOrNull
                 val userEl = obj?.get("user")
-                if (raw.code in 200..299 && token != null && userEl != null) {
-                    ApiResult.Ok(AuthResponse(token, json.decodeFromJsonElement(User.serializer(), userEl)))
-                } else ApiResult.Fail(errorOf(obj))
+                // Guarded: login runs NonCancellable, so a throw here (an unreadable user) crashed the app.
+                val user = if (raw.code in 200..299) userEl?.let { runCatching { json.decodeFromJsonElement(User.serializer(), it) }.getOrNull() } else null
+                if (token != null && user != null) ApiResult.Ok(AuthResponse(token, user))
+                else if (raw.code in 200..299) ApiResult.Fail("پاسخ سرور نامعتبر است.")
+                else ApiResult.Fail(errorOf(obj))
             },
             onFailure = { ApiResult.Fail(NET_ERR, network = true) },
         )
@@ -195,17 +199,22 @@ class HamrahApi(context: Context) {
                 val obj = parse(raw.body)
                 val token = obj?.get("token")?.jsonPrimitive?.contentOrNull
                 val userEl = obj?.get("user")
-                if (raw.code in 200..299 && token != null && userEl != null) {
-                    ApiResult.Ok(AuthResponse(token, json.decodeFromJsonElement(User.serializer(), userEl)))
-                } else ApiResult.Fail(errorOf(obj))
+                // Guarded: login runs NonCancellable, so a throw here (an unreadable user) crashed the app.
+                val user = if (raw.code in 200..299) userEl?.let { runCatching { json.decodeFromJsonElement(User.serializer(), it) }.getOrNull() } else null
+                if (token != null && user != null) ApiResult.Ok(AuthResponse(token, user))
+                else if (raw.code in 200..299) ApiResult.Fail("پاسخ سرور نامعتبر است.")
+                else ApiResult.Fail(errorOf(obj))
             },
             onFailure = { ApiResult.Fail(NET_ERR, network = true) },
         )
     }
 
+    /** Any server reply counts as sent (the server never reveals whether the email exists); only a transport failure fails. */
     suspend fun reset(bodyJson: String): ApiResult<Unit> = withContext(Dispatchers.IO) {
-        runCatching { request("POST", "auth/reset", bodyJson, auth = false) }
-            .fold({ ApiResult.Ok(Unit) }, { ApiResult.Ok(Unit) })
+        runCatching { request("POST", "auth/reset", bodyJson, auth = false) }.fold(
+            onSuccess = { raw -> if (raw.code >= 500) ApiResult.Fail(NET_ERR, network = true) else ApiResult.Ok(Unit) },
+            onFailure = { ApiResult.Fail(NET_ERR, network = true) },
+        )
     }
 
     /** Signed URL when one is cached (refreshed in the background), else the legacy bare URL. See [FileUrls]. */
@@ -238,12 +247,16 @@ class HamrahApi(context: Context) {
                 c.setFixedLengthStreamingMode(bytes.size)
                 c.setRequestProperty("Content-Type", mime)
                 c.setRequestProperty("X-Filename", java.net.URLEncoder.encode(name, "UTF-8"))
-                token?.let { c.setRequestProperty("Authorization", "Bearer $it") }
+                val sent = token
+                sent?.let { c.setRequestProperty("Authorization", "Bearer $it") }
                 c.outputStream.use { it.write(bytes) }
-                val stream = if (c.responseCode in 200..299) c.inputStream else (c.errorStream ?: c.inputStream)
-                val obj = parse(stream.bufferedReader(Charsets.UTF_8).use(BufferedReader::readText))
+                val code = c.responseCode
+                if (code == 401) return@runCatching unauthorized(sent)
+                val text = if (code in 200..299) c.inputStream.bufferedReader(Charsets.UTF_8).use(BufferedReader::readText)
+                else runCatching { c.errorStream?.bufferedReader(Charsets.UTF_8)?.use(BufferedReader::readText) }.getOrNull().orEmpty()
+                val obj = parse(text)
                 val rel = obj?.get("file")?.jsonObject?.get("url")?.jsonPrimitive?.contentOrNull
-                if (c.responseCode in 200..299 && rel != null) ApiResult.Ok(base + rel) else ApiResult.Fail(errorOf(obj))
+                if (code in 200..299 && rel != null) ApiResult.Ok(base + rel) else ApiResult.Fail(errorOf(obj))
             } finally {
                 c.disconnect()
             }

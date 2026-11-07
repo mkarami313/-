@@ -323,7 +323,11 @@ private fun rememberExoPlayer(src: String?, startMs: Long, onPosition: (Long) ->
     if (src == null) return null
     val ctx = LocalContext.current.applicationContext
     val player = remember(src) {
-        ExoPlayer.Builder(ctx).build().apply {
+        // Audio focus: pause for calls / other players instead of talking over them.
+        ExoPlayer.Builder(ctx)
+            .setAudioAttributes(androidx.media3.common.AudioAttributes.DEFAULT, /* handleAudioFocus = */ true)
+            .setHandleAudioBecomingNoisy(true)
+            .build().apply {
             setMediaItem(MediaItem.fromUri(src))
             if (startMs > 0) seekTo(startMs)
             prepare()
@@ -397,20 +401,44 @@ private fun FullscreenEffect() {
 @Composable
 private fun AparatPlayer(hash: String, url: String) {
     val ctx = LocalContext.current
+    var web by remember { mutableStateOf<WebView?>(null) }
+    @Suppress("DEPRECATION")
+    val owner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    // A WebView keeps playing (audio and all) with the app in the background or the screen off unless paused.
+    DisposableEffect(owner, web) {
+        val w = web
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, e ->
+            when (e) {
+                androidx.lifecycle.Lifecycle.Event.ON_STOP -> w?.onPause()
+                androidx.lifecycle.Lifecycle.Event.ON_START -> w?.onResume()
+                else -> Unit
+            }
+        }
+        owner.lifecycle.addObserver(obs)
+        onDispose { owner.lifecycle.removeObserver(obs) }
+    }
     Column {
         Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).background(Color.Black)) {
             AndroidView(
-                factory = { c -> WebView(c).apply {
+                factory = { c -> WebView(c).also { web = it }.apply {
                     layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
                     settings.mediaPlaybackRequiresUserGesture = false
-                    webViewClient = WebViewClient()
+                    webViewClient = object : WebViewClient() {
+                        // Keep the frame on the embed; any other link (channel, related video, ads) goes to the browser.
+                        override fun shouldOverrideUrlLoading(view: WebView, request: android.webkit.WebResourceRequest): Boolean {
+                            val u = request.url.toString()
+                            if (!request.isForMainFrame || u.contains("/embed/")) return false
+                            openUrl(view.context, u)
+                            return true
+                        }
+                    }
                     webChromeClient = WebChromeClient()
                     setBackgroundColor(android.graphics.Color.BLACK)
                     loadUrl("https://www.aparat.com/video/video/embed/videohash/$hash/vt/frame")
                 } },
-                onRelease = { w -> w.stopLoading(); w.loadUrl("about:blank"); w.destroy() },
+                onRelease = { w -> web = null; w.stopLoading(); w.loadUrl("about:blank"); w.destroy() },
                 modifier = Modifier.fillMaxSize(),
             )
         }

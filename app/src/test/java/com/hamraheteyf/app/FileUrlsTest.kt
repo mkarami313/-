@@ -69,4 +69,14 @@ class FileUrlsTest {
         assertEquals("0123456789abcdef", FileUrlResolver.idOf(base + "files/0123456789abcdef?exp=1&sig=ab"))
         assertNull(FileUrlResolver.idOf("https://example.com/video.mp4"))
     }
+
+    @Test fun idTheServerWontSignIsNotRefetchedOnEveryCall() = runTest {
+        val r = FileUrlResolver(base, { clock }) { ids -> calls += ids; ResolvedUrls(emptyMap(), clock + ttlMs) }
+        assertEquals(base + "files/gone1234", r.resolve("gone1234"))
+        assertFalse(r.needsRefresh("gone1234"))
+        r.resolve("gone1234")
+        assertEquals(1, calls.size)
+        clock += 11 * 60_000L
+        assertTrue(r.needsRefresh("gone1234"))  // retried after the miss TTL
+    }
 }

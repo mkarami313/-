@@ -57,7 +57,7 @@ fun GuideDetailScreen(guideId: String, onBack: () -> Unit) {
                     }
                     reportDialog()
                     IconButton(onClick = { vm.toggleSaved() }) {
-                        Icon(if (saved) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder, contentDescription = "ذخیره", tint = androidx.compose.ui.graphics.Color.White)
+                        Icon(if (saved) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder, contentDescription = if (saved) "برداشتن از ذخیره‌شده‌ها" else "ذخیره", tint = androidx.compose.ui.graphics.Color.White)
                     }
                 },
             )
