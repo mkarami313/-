@@ -44,6 +44,7 @@ import com.hamraheteyf.app.ui.modules.EmergencyCardPublicScreen
 import com.hamraheteyf.app.ui.navigation.AppFeatures
 import com.hamraheteyf.app.ui.navigation.FeatureFlags
 import com.hamraheteyf.app.ui.navigation.Routes
+import kotlinx.coroutines.launch
 
 @Composable
 fun AppRoot() {
@@ -89,10 +90,14 @@ private fun MainNavHost() {
 
     // A tapped system notification: open its target once the graph is up (and onboarding is done).
     val deepLink by PendingDeepLink.target.collectAsState()
+    val notificationRepo = LocalAppContainer.current.notificationRepository
+    val deepLinkScope = androidx.compose.runtime.rememberCoroutineScope()
     LaunchedEffect(deepLink, currentRoute) {
         val t = deepLink ?: return@LaunchedEffect
         if (currentRoute == null || currentRoute == Routes.ONBOARDING) return@LaunchedEffect
         PendingDeepLink.consume()
+        // Opening a notification from the tray reads it: without this it stayed unread in the inbox (and the badge).
+        t.notifId?.takeIf { it.isNotBlank() }?.let { id -> deepLinkScope.launch { runCatching { notificationRepo.markRead(id) } } }
         val route = Routes.forNotification(t.type, t.relatedId) ?: Routes.NOTIFICATIONS
         runCatching { nav.navigate(route) { launchSingleTop = true } }
     }

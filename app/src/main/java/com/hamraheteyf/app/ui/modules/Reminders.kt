@@ -70,6 +70,7 @@ object Reminders {
 
     // ------------------------------------------------------------ medications (daily)
 
+    @Synchronized
     fun sync(context: Context, meds: List<Rec>) {
         val items = JSONArray()
         meds.forEach { m ->
@@ -88,6 +89,7 @@ object Reminders {
     }
 
     /** Re-arms every stored alarm (meds + future appointments). Safe to call any time. */
+    @Synchronized
     fun scheduleAll(context: Context) {
         val meds = read(context, KEY)
         for (i in 0 until meds.length()) runCatching { schedule(context, meds.getJSONObject(i)) }
@@ -130,12 +132,17 @@ object Reminders {
     suspend fun reconcileAppointments(ctx: Context, client: RecClient) {
         val booked = (client.list("slot", booked = true) as? ApiResult.Ok)?.data ?: return
         val want = wantedAppointments(booked, System.currentTimeMillis())
-        val stored = read(ctx, KEY_APPTS)
-        val have = HashMap<String, Pair<String, Long>>()
-        for (i in 0 until stored.length()) stored.getJSONObject(i).let { have[it.getString("id")] = it.getString("title") to it.getLong("at") }
-        val plan = planAppointments(want, have)
-        plan.cancel.forEach { cancel(ctx, it) }
-        plan.schedule.forEach { (id, v) -> scheduleAppointment(ctx, id, v.first, v.second) }
+        // Read-modify-write of the stored list under the same lock as every other writer: the poller, the
+        // post-login refresh and the booking screen used to interleave and drop entries (an alarm left armed for a
+        // cancelled slot, and never re-armed after a reboot).
+        synchronized(this) {
+            val stored = read(ctx, KEY_APPTS)
+            val have = HashMap<String, Pair<String, Long>>()
+            for (i in 0 until stored.length()) stored.getJSONObject(i).let { have[it.getString("id")] = it.getString("title") to it.getLong("at") }
+            val plan = planAppointments(want, have)
+            plan.cancel.forEach { cancel(ctx, it) }
+            plan.schedule.forEach { (id, v) -> scheduleAppointment(ctx, id, v.first, v.second) }
+        }
     }
 
     /** Future slots this user holds, as alarm id → (title, start epoch ms). */
@@ -166,6 +173,7 @@ object Reminders {
     }
 
     /** Replaces all step alarms of [schedId]; an empty [times] turns them all off. */
+    @Synchronized
     fun setStepAlarms(ctx: Context, schedId: String, title: String, steps: List<String>, times: Map<Int, Pair<Int, Int>>) {
         val old = read(ctx, KEY_STEPS); val keep = JSONArray()
         for (i in 0 until old.length()) old.getJSONObject(i).let { if (it.optString("sid") == schedId) cancelKey(ctx, it.getString("key")) else keep.put(it) }
@@ -181,6 +189,7 @@ object Reminders {
     }
 
     /** Drops alarms of deleted schedules / removed steps and refreshes titles and step texts after an edit. */
+    @Synchronized
     fun reconcileSteps(ctx: Context, schedules: Map<String, Pair<String, List<String>>>) {
         val old = read(ctx, KEY_STEPS); val keep = JSONArray(); var changed = false
         for (i in 0 until old.length()) {
@@ -234,6 +243,7 @@ object Reminders {
     // ------------------------------------------------------------ appointments (one-shot)
 
     /** Notifies at [atEpochMs] and one hour before it. Re-scheduling the same [id] replaces it. */
+    @Synchronized
     fun scheduleAppointment(ctx: Context, id: String, title: String, atEpochMs: Long) {
         cancel(ctx, id)
         if (atEpochMs <= System.currentTimeMillis()) return
@@ -243,6 +253,7 @@ object Reminders {
         armAppointment(ctx, a)
     }
 
+    @Synchronized
     fun cancel(ctx: Context, id: String) {
         val list = read(ctx, KEY_APPTS)
         val keep = JSONArray()
@@ -256,6 +267,7 @@ object Reminders {
     }
 
     /** Removes every alarm and stored reminder (sign-out). */
+    @Synchronized
     fun clearAll(ctx: Context) {
         val meds = read(ctx, KEY)
         for (i in 0 until meds.length()) cancelKey(ctx, meds.getJSONObject(i).getString("key"))

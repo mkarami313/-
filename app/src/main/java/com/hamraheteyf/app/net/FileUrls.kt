@@ -55,13 +55,21 @@ class FileUrlResolver(
         if (!force && !needsRefresh(id)) return url(id)
         pending.add(id)
         mutex.withLock {
-            if (!force && !needsRefresh(id)) return url(id)
+            if (!force && !needsRefresh(id)) { pending.remove(id); return url(id) }
             // A recent failure (offline) must not make every image in a list wait on the network again.
             if (!force && now() - failedAt < FAIL_BACKOFF_MS) { pending.remove(id); return url(id) }
             val batch = (listOf(id) + pending.filter { it != id && needsRefresh(it) }).take(MAX_BATCH)
             pending.removeAll(batch.toSet())
             val r = runCatching { fetch(batch) }.getOrNull()
-            if (r == null) failedAt = now() else { failedAt = 0; store(r) }
+            if (r == null) failedAt = now() else {
+                failedAt = 0
+                store(r)
+                // Ids the server didn't sign (deleted / not visible to us) would otherwise stay "needs refresh"
+                // forever, so every recomposition of an image showing one fired another fileUrls call.
+                // Remember the bare URL for a while instead.
+                val until = now() + REFRESH_MARGIN_MS + MISS_TTL_MS
+                batch.filter { it !in r.urls }.forEach { cache[it] = Entry(bare(it), until) }
+            }
         }
         return url(id)
     }
@@ -81,6 +89,7 @@ class FileUrlResolver(
         private const val MIN_VALID_MS = 30_000L
         private const val FAIL_BACKOFF_MS = 15_000L
         private const val MAX_BATCH = 100
+        private const val MISS_TTL_MS = 10 * 60_000L
 
         private val ID_RE = Regex("/files/([A-Za-z0-9_-]{8,64})(?:[?#].*)?$")
 

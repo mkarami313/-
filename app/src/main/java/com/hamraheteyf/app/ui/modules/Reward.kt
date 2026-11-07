@@ -21,8 +21,8 @@ import kotlinx.coroutines.launch
 
 private val Gold = Color(0xFFFFB300)
 
-private fun Rec.goalN() = this["goal"].toIntOrNull()?.coerceIn(1, 30) ?: 5
-private fun Rec.starsN() = this["stars"].toIntOrNull()?.coerceAtLeast(0) ?: 0
+private fun Rec.goalN() = ReminderTimes.digits(this["goal"]).toIntOrNull()?.coerceIn(1, 50) ?: 5  // server range 1–50 (a goal of 45 showed as 30)
+private fun Rec.starsN() = ReminderTimes.digits(this["stars"]).toIntOrNull()?.coerceAtLeast(0) ?: 0
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -41,12 +41,22 @@ fun RewardScreen(onBack: () -> Unit) {
     val st = rememberRecs(client, "reward", tick)
     val shown = remember(st.items, filter) { st.items?.filter { filter.isBlank() || it["childId"] == filter || it["childId"].isBlank() } }
 
+    // Stars shown right away (pending) and one save per card at a time: two quick taps used to both save
+    // "on-screen stars + 1", so the child got one star instead of two.
+    val pending = remember { mutableStateMapOf<String, Int>() }
+    val saving = remember { mutableStateListOf<String>() }
+    LaunchedEffect(st.items) { pending.keys.filter { it !in saving }.forEach { pending.remove(it) } }
+
     fun setStars(r: Rec, n: Int, reached: Boolean) {
+        val c = client ?: return
+        if (r.id in saving) return
+        saving += r.id; pending[r.id] = n
         scope.launch {
-            when (val res = client!!.save("reward", r.id, r.f + ("stars" to n.toString()))) {
-                is ApiResult.Fail -> snack.showSnackbar(res.message)
+            when (val res = c.save("reward", r.id, r.f + ("stars" to n.toString()))) {
+                is ApiResult.Fail -> { pending.remove(r.id); snack.showSnackbar(res.message) }
                 is ApiResult.Ok -> { lastAdded = r.id; if (reached) celebrate = r.copy(f = r.f + ("stars" to n.toString())) }
             }
+            saving -= r.id
             tick++
         }
     }
@@ -59,7 +69,7 @@ fun RewardScreen(onBack: () -> Unit) {
         Column(Modifier.padding(pad).fillMaxSize()) {
             ChildChipRow(children, filter, { filter = it }, modifier = Modifier.padding(12.dp, 8.dp))
             RecListBody(RecState(shown, st.error), "هنوز جدولی ندارید. یک هدف بسازید و برای هر کار خوب یک ستاره بدهید.", { tick++ }) { r ->
-                val goal = r.goalN(); val stars = r.starsN()
+                val goal = r.goalN(); val stars = pending[r.id] ?: r.starsN()
                 CompactCard {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(r["emoji"].ifBlank { "🌟" }, fontSize = 30.sp)
@@ -77,10 +87,10 @@ fun RewardScreen(onBack: () -> Unit) {
                     }
                     Spacer(Modifier.height(8.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Button(onClick = { setStars(r, stars + 1, stars + 1 >= goal) }, enabled = stars < goal) { Text("⭐ یک ستاره بده") }
+                        Button(onClick = { setStars(r, stars + 1, stars + 1 >= goal) }, enabled = stars < goal && r.id !in saving) { Text("⭐ یک ستاره بده") }
                         Text("${stars.toPersianDigits()} از ${goal.toPersianDigits()}", style = MaterialTheme.typography.labelLarge)
                         Spacer(Modifier.weight(1f))
-                        if (stars > 0) TextButton(onClick = { setStars(r, 0, false) }) { Text("شروع دوباره") }
+                        if (stars > 0) TextButton(onClick = { setStars(r, 0, false) }, enabled = r.id !in saving) { Text("شروع دوباره") }
                     }
                 }
             }
@@ -114,7 +124,7 @@ fun RewardScreen(onBack: () -> Unit) {
             ChildChipRow(children, v["childId"].orEmpty(), { v["childId"] = it }, allLabel = null)
             OutlinedTextField(v["title"].orEmpty(), { v["title"] = it }, label = { Text("عنوان *") }, supportingText = { Text("مثلاً «مسواک زدن بدون کمک»") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(v["emoji"].orEmpty(), { v["emoji"] = it.take(8) }, label = { Text("ایموجی") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(v["goal"].orEmpty(), { v["goal"] = it.filter { c -> c.isDigit() }.take(2) }, label = { Text("تعداد ستارهٔ لازم (۱ تا ۳۰)") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+            OutlinedTextField(v["goal"].orEmpty(), { v["goal"] = it.filter { c -> c.isDigit() }.take(2) }, label = { Text("تعداد ستارهٔ لازم (۱ تا ۵۰)") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
                 keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number))
         }
     }

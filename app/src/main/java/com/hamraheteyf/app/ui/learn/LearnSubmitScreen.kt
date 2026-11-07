@@ -81,6 +81,10 @@ fun LearnSubmitScreen(editId: String?, onBack: () -> Unit, onDone: () -> Unit) {
     var uploadJob by remember { mutableStateOf<Job?>(null) }
     var uploadGen by remember { mutableIntStateOf(0) }
     var uploadError by remember { mutableStateOf<String?>(null) }
+    // The file being uploaded is shown from these; videoId/videoName/videoSize keep the CURRENT (e.g. already
+    // published) video until the new upload succeeds, so cancelling or a failure no longer wipes it.
+    var uploadingName by remember { mutableStateOf("") }
+    var uploadingSize by remember { mutableLongStateOf(-1L) }
     var submitting by remember { mutableStateOf(false) }
     var formError by remember { mutableStateOf<String?>(null) }
     var showErrors by rememberSaveable { mutableStateOf(false) }
@@ -122,7 +126,7 @@ fun LearnSubmitScreen(editId: String?, onBack: () -> Unit, onDone: () -> Unit) {
             val gen = ++uploadGen
             uploadJob = scope.launch {
                 val (name, size) = fileMeta(ctx, uri)
-                videoName = name; videoSize = size; videoId = null; dirty = true
+                uploadingName = name; uploadingSize = size
                 uploadProgress = 0
                 var last = 0
                 val r = client.uploadVideo(ctx, uri) { p ->
@@ -131,7 +135,7 @@ fun LearnSubmitScreen(editId: String?, onBack: () -> Unit, onDone: () -> Unit) {
                 if (gen != uploadGen) return@launch  // cancelled / replaced: keep the form as it is
                 uploadProgress = null
                 when (r) {
-                    is ApiResult.Ok -> { videoId = r.data; formError = null }
+                    is ApiResult.Ok -> { videoId = r.data; videoName = uploadingName; videoSize = uploadingSize; dirty = true; formError = null }
                     is ApiResult.Fail -> { uploadError = r.message }
                 }
                 uploadJob = null
@@ -146,6 +150,7 @@ fun LearnSubmitScreen(editId: String?, onBack: () -> Unit, onDone: () -> Unit) {
     val videoErr = kind == "video" && (if (source == "upload") videoId == null else !aparatOk)
 
     fun submit() {
+        if (submitting) return  // two taps in one frame used to POST the submission twice
         showErrors = true
         val msg = when {
             catErr -> "یک دسته‌بندی انتخاب کنید."
@@ -244,21 +249,24 @@ fun LearnSubmitScreen(editId: String?, onBack: () -> Unit, onDone: () -> Unit) {
                 if (source == "upload") {
                     AppCard {
                         val p = uploadProgress
-                        if (videoName.isBlank() && p == null) {
+                        val shownName = if (p != null) uploadingName else videoName
+                        val shownSize = if (p != null) uploadingSize else videoSize
+                        if (shownName.isBlank() && p == null) {
                             Text("فایلِ mp4 تا ۲۵۰ مگابایت. بارگذاری با انتخابِ فایل شروع می‌شود.", style = MaterialTheme.typography.bodySmall, color = muted())
                         } else {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(if (videoId != null) Icons.Outlined.CheckCircle else Icons.Outlined.Movie, null,
-                                    tint = if (videoId != null) com.hamraheteyf.app.ui.theme.VerifiedGreen else muted())
+                                val done = p == null && videoId != null
+                                Icon(if (done) Icons.Outlined.CheckCircle else Icons.Outlined.Movie, null,
+                                    tint = if (done) com.hamraheteyf.app.ui.theme.VerifiedGreen else muted())
                                 Spacer(Modifier.width(8.dp))
                                 Column(Modifier.weight(1f)) {
-                                    Text(videoName, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    val sub = listOfNotNull(videoSize.takeIf { it > 0 }?.let { sizeFa(it) },
+                                    Text(shownName, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    val sub = listOfNotNull(shownSize.takeIf { it > 0 }?.let { sizeFa(it) },
                                         when { p != null -> "در حالِ بارگذاری ${p.toPersianDigits()}٪"; videoId != null -> "بارگذاری شد"; else -> null }).joinToString(" · ")
                                     if (sub.isNotEmpty()) Text(sub, style = MaterialTheme.typography.labelSmall, color = muted())
                                 }
                                 if (p != null) TextButton(onClick = {
-                                    uploadGen++; uploadJob?.cancel(); uploadJob = null; uploadProgress = null; videoName = ""; videoSize = -1
+                                    uploadGen++; uploadJob?.cancel(); uploadJob = null; uploadProgress = null; uploadingName = ""; uploadingSize = -1
                                 }) { Text("لغو") }
                             }
                             if (p != null) { Spacer(Modifier.height(6.dp)); LinearProgressIndicator(progress = { p / 100f }, modifier = Modifier.fillMaxWidth()) }

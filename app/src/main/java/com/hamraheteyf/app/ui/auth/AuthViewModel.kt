@@ -33,7 +33,8 @@ class AuthViewModel(
      * (encrypted) for later fingerprint sign-in. The save runs here, in the ViewModel scope,
      * because the login screen is torn down the instant the session becomes active.
      */
-    fun login(email: String, password: String, remember: Boolean = false) {
+    fun login(email: String, password: String, remember: Boolean = false, fromBiometric: Boolean = false) {
+        if (_state.value.loading) return
         _state.value = AuthUiState(loading = true)
         // NonCancellable (as in register): auth.login suspends inside onAuthenticated (first refresh) AFTER the
         // session went active; if the torn-down screen cancelled it there, polling, reminders, push registration
@@ -41,10 +42,19 @@ class AuthViewModel(
         viewModelScope.launch(kotlinx.coroutines.NonCancellable) {
             when (val r = auth.login(email.trim(), password)) {
                 is DataResult.Success -> {
-                    if (remember) vault?.save(email.trim(), password) else vault?.clear()
+                    // Off the main thread: a v2 save generates a fresh Keystore RSA key (up to seconds in a TEE).
+                    // A fingerprint sign-in just used the saved credentials, so there is nothing new to save.
+                    if (!fromBiometric) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        runCatching { if (remember) vault?.save(email.trim(), password) else vault?.clear() }
+                    }
                     _state.value = AuthUiState() // root switches automatically
                 }
-                is DataResult.Error -> _state.value = AuthUiState(error = r.message)
+                is DataResult.Error -> {
+                    // Saved credentials the server rejects (password reset elsewhere, account gone) would otherwise
+                    // auto-prompt and fail on every launch. A transport error says nothing about them: keep.
+                    if (fromBiometric && !r.message.startsWith("خطای ارتباط")) runCatching { vault?.clear() }
+                    _state.value = AuthUiState(error = r.message)
+                }
             }
         }
     }
@@ -69,9 +79,14 @@ class AuthViewModel(
     }
 
     fun resetPassword(email: String) {
+        if (_state.value.loading) return
+        _state.value = _state.value.copy(loading = true, error = null, info = null)
         viewModelScope.launch {
-            auth.sendPasswordReset(email)
-            _state.value = _state.value.copy(info = "اگر این ایمیل ثبت شده باشد، راهنمای بازیابی ارسال می‌شود.")
+            _state.value = when (val r = auth.sendPasswordReset(email)) {
+                is DataResult.Success -> _state.value.copy(loading = false, info = "اگر این ایمیل ثبت شده باشد، راهنمای بازیابی ارسال می‌شود.")
+                // A transport failure used to be reported as "sent" — the user waited for an email that never left.
+                is DataResult.Error -> _state.value.copy(loading = false, error = r.message)
+            }
         }
     }
 }

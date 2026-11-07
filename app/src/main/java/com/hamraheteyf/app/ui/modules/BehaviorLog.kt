@@ -148,7 +148,7 @@ private fun LogEditor(client: RecClient, children: List<com.hamraheteyf.app.data
         if (isSleep) {
             val hours = v["durationMin"]?.toIntOrNull()?.let { (it / 60.0).toString().removeSuffix(".0") }.orEmpty()
             var txt by remember { mutableStateOf(hours) }
-            OutlinedTextField(txt, { txt = it; v["durationMin"] = ((it.replace('٫', '.').replace(',', '.').toDoubleOrNull() ?: 0.0) * 60).toInt().takeIf { m -> m > 0 }?.toString().orEmpty() },
+            OutlinedTextField(txt, { txt = it; v["durationMin"] = ((ReminderTimes.digits(it).replace('٫', '.').replace(',', '.').toDoubleOrNull() ?: 0.0) * 60).toInt().takeIf { m -> m > 0 }?.toString().orEmpty() },
                 label = { Text("مدت خواب (ساعت)") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
                 keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal))
         } else {

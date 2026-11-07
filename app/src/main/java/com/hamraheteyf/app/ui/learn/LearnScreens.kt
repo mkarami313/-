@@ -75,6 +75,8 @@ fun LearnHubScreen(
     val admin = rememberIsAdmin()
     var tick by remember { mutableIntStateOf(0) }
     var filter by rememberSaveable { mutableIntStateOf(0) } // 0 همه، 1 ویدیوها، 2 مقاله‌ها
+    // Back from reviewing / submitting: the pending-review count and the latest lists were stale until a restart.
+    RefreshOnResume { tick++ }
     val state by produceState<Load<HubData>>(Load.Loading, client, tick, admin) {
         if (client == null) { value = Load.Err(OFFLINE); return@produceState }
         if (value !is Load.Ok) value = Load.Loading
@@ -294,8 +296,9 @@ private class LearnPager {
         if (g != gen) return
         loading = false
         when (r) {
-            is ApiResult.Ok -> { page++; val ids = items.map { it.id }.toSet(); items.addAll(r.data.items.filter { it.id !in ids }); hasMore = r.data.hasMore }
-            is ApiResult.Fail -> { error = r.message; hasMore = false }
+            is ApiResult.Ok -> { page++; error = null; val ids = items.map { it.id }.toSet(); items.addAll(r.data.items.filter { it.id !in ids }); hasMore = r.data.hasMore }
+            // Keep hasMore: the footer's «بیشتر» button is the retry (a single failure used to end the list for good).
+            is ApiResult.Fail -> error = r.message
         }
     }
 

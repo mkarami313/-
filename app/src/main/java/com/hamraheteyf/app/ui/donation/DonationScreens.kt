@@ -56,7 +56,8 @@ fun DonationListScreen(onBack: () -> Unit, onOpen: (String) -> Unit, onCreate: (
     LaunchedEffect(tab, category, reload, client) {
         if (client == null) { error = "این بخش در حالت آفلاین در دسترس نیست."; return@LaunchedEffect }
         items = null; error = null
-        when (val r = client.list(category.takeIf { it != ALL }, mine = tab == 1)) {
+        // The category picker only exists on the "all" tab; a category chosen there must not hide the user's own ads.
+        when (val r = client.list(category.takeIf { it != ALL && tab == 0 }, mine = tab == 1)) {
             is ApiResult.Ok -> { items = r.data.first; categories = r.data.second }
             is ApiResult.Fail -> error = r.message
         }
@@ -135,6 +136,7 @@ private fun DonationCard(d: DonationItem, client: DonationClient, onClick: () ->
 @Composable
 fun DonationDetailScreen(id: String, onBack: () -> Unit, onOpenConversation: (String) -> Unit) {
     val client = rememberClient()
+    val convRepo = LocalAppContainer.current.conversationRepository
     val scope = rememberCoroutineScope()
     var item by remember { mutableStateOf<DonationItem?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -147,14 +149,15 @@ fun DonationDetailScreen(id: String, onBack: () -> Unit, onOpenConversation: (St
     LaunchedEffect(id, reload, client) {
         if (client == null) { error = "این بخش در حالت آفلاین در دسترس نیست."; return@LaunchedEffect }
         when (val r = client.get(id)) {
-            is ApiResult.Ok -> item = r.data
+            is ApiResult.Ok -> { item = r.data; error = null }
             is ApiResult.Fail -> error = r.message
         }
     }
 
     fun run(block: suspend () -> ApiResult<*>) {
+        if (busy) return
+        busy = true
         scope.launch {
-            busy = true
             when (val r = block()) {
                 is ApiResult.Fail -> message = r.message
                 is ApiResult.Ok -> reload++
@@ -164,18 +167,23 @@ fun DonationDetailScreen(id: String, onBack: () -> Unit, onOpenConversation: (St
     }
 
     fun chat(userId: String) {
+        if (busy) return
         scope.launch {
-            when (val r = client!!.openChat(userId)) {
-                is ApiResult.Ok -> onOpenConversation(r.data)
-                is ApiResult.Fail -> message = r.message
+            busy = true
+            // Through the conversation repository so the new conversation lands in the local mirror: the raw
+            // action left it out, and the conversation screen opened on "not found" until the next poll.
+            when (val r = convRepo.requestConversation(userId)) {
+                is com.hamraheteyf.app.data.DataResult.Success -> if (r.data.isNotBlank()) onOpenConversation(r.data) else message = "گفتگو باز نشد."
+                is com.hamraheteyf.app.data.DataResult.Error -> message = r.message
             }
+            busy = false
         }
     }
 
     Scaffold(topBar = { ScreenHeader("جزئیات", onBack = onBack) }) { padding ->
         val d = item
         when {
-            error != null -> ErrorState(error!!, modifier = Modifier.padding(padding))
+            error != null -> ErrorState(error!!, onRetry = { error = null; reload++ }, modifier = Modifier.padding(padding))
             d == null || client == null -> LoadingState(Modifier.padding(padding))
             else -> Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState())) {
                 if (d.imageIds.isNotEmpty()) {
@@ -368,8 +376,9 @@ fun DonationCreateScreen(onBack: () -> Unit, onCreated: (String) -> Unit) {
             OutlinedTextField(description, { description = it.take(1000) }, label = { Text("توضیحات (سن مناسب، ابعاد، نکات)") }, minLines = 3, modifier = Modifier.fillMaxWidth())
             error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
             BigPrimaryButton(if (busy) "در حال ثبت…" else "ثبت آگهی", enabled = !busy && title.trim().length >= 3 && category.isNotBlank(), onClick = {
+                if (busy) return@BigPrimaryButton  // busy was set inside launch: two quick taps posted the ad twice
+                busy = true; error = null
                 scope.launch {
-                    busy = true; error = null
                     val urls = mutableListOf<String>()
                     for ((i, uri) in picked.withIndex()) {
                         val bytes = prepareImageForUpload(context, uri)

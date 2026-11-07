@@ -148,7 +148,9 @@ fun ChildFileScreen(onBack: () -> Unit) {
                 TextButton(onClick = { showShare = !showShare }, Modifier.padding(horizontal = 4.dp)) { Text(if (showShare) "بستن اشتراک‌گذاری و گزارش" else "اشتراک‌گذاری و گزارش ${children.nameOf(selected)}") }
                 if (showShare) {
                     Box(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()).padding(horizontal = 12.dp)) {
-                        ShareAndReportSection(selected, children.nameOf(selected))
+                        // Keyed by child: a just-created share code (saved state) otherwise stayed on screen under the
+                        // NEXT child's heading, so a parent could hand out the wrong child's code.
+                        androidx.compose.runtime.key(selected) { ShareAndReportSection(selected, children.nameOf(selected)) }
                     }
                 }
             }

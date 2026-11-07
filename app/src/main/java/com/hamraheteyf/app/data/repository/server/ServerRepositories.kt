@@ -48,8 +48,10 @@ class ServerAuthRepository(private val store: ServerStore) : AuthRepository {
     override fun logout() = store.signOut()
 
     override suspend fun sendPasswordReset(email: String): DataResult<Unit> {
-        store.api.reset(argsJson("email" to email))
-        return DataResult.Success(Unit)
+        return when (val r = store.api.reset(argsJson("email" to email))) {
+            is ApiResult.Ok -> DataResult.Success(Unit)
+            is ApiResult.Fail -> DataResult.Error(r.message)
+        }
     }
 
     override suspend fun deleteAccount(): DataResult<Unit> {
@@ -347,10 +349,10 @@ class ServerAdminRepository(private val store: ServerStore) : AdminRepository {
     override suspend fun viewCredential(requestId: String): DataResult<VerificationRequest> =
         when (val r = store.act("viewCredential", argsJson("requestId" to requestId))) {
             is DataResult.Success -> {
-                val obj = ServerStore.objectField(r.data, "request")
-                if (obj != null)
-                    DataResult.Success(json.decodeFromJsonElement(VerificationRequest.serializer(), obj))
-                else DataResult.Error("درخواست یافت نشد.")
+                val req = ServerStore.objectField(r.data, "request")?.let { obj ->
+                    runCatching { json.decodeFromJsonElement(VerificationRequest.serializer(), obj) }.getOrNull()
+                }
+                if (req != null) DataResult.Success(req) else DataResult.Error("درخواست یافت نشد.")
             }
             is DataResult.Error -> DataResult.Error(r.message)
         }

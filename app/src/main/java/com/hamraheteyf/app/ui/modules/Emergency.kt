@@ -79,9 +79,20 @@ object EmergencyCache {
     suspend fun cachePhotos(c: Context, api: com.hamraheteyf.app.net.HamrahApi, recs: List<Rec>) = withContext(Dispatchers.IO) {
         recs.forEach { r ->
             val f = photoFile(c, r.id)
-            if (r["photo"].isBlank()) { f.delete(); return@forEach }
+            val photoId = r["photo"]
+            val key = "photoOf_${r.id}"
+            if (photoId.isBlank()) { f.delete(); prefs(c).edit().remove(key).apply(); return@forEach }
+            // Already have exactly this photo: nothing to fetch. A CHANGED photo drops the old file first — the
+            // card prefers the cached file, so the old picture kept showing (offline: for good) after a change.
+            if (f.exists() && prefs(c).getString(key, null) == photoId) return@forEach
+            if (prefs(c).getString(key, null) != photoId) { f.delete(); prefs(c).edit().remove(key).apply() }
             runCatching {
-                com.hamraheteyf.app.net.FileUrls.download(r["photo"], 10_000, 20_000)?.let { f.writeBytes(it) }
+                com.hamraheteyf.app.net.FileUrls.download(photoId, 10_000, 20_000)?.let { bytes ->
+                    val tmp = File(f.parentFile, f.name + ".tmp")
+                    tmp.writeBytes(bytes)
+                    if (!tmp.renameTo(f)) { f.delete(); tmp.renameTo(f) }
+                    prefs(c).edit().putString(key, photoId).apply()
+                }
             }
         }
     }

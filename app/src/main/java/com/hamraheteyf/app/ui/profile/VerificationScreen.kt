@@ -83,15 +83,17 @@ fun VerificationScreen(onBack: () -> Unit) {
     }
 
     fun submit() {
+        if (busy) return
         val api = container.serverApi
+        busy = true; error = null
         scope.launch {
-            busy = true; error = null
             val ids = mutableListOf<String>()
             for (d in docs) {
                 if (d.id != null) { ids += d.id; continue }
                 val uri = d.uri ?: continue
                 val isPdf = ctx.contentResolver.getType(uri) == "application/pdf"
-                val bytes = if (isPdf) withContext(Dispatchers.IO) { runCatching { ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull() }
+                // Capped read: a large scanned PDF read whole could OOM before the size check below.
+                val bytes = if (isPdf) withContext(Dispatchers.IO) { runCatching { ctx.contentResolver.openInputStream(uri)?.use { readCapped(it, MAX_PDF_BYTES + 1) } }.getOrNull() }
                 else prepareImageForUpload(ctx, uri)
                 if (bytes == null) { error = "«${d.name}» خوانده نشد."; busy = false; return@launch }
                 if (isPdf && bytes.size > MAX_PDF_BYTES) { error = "«${d.name}» بیشتر از ۷ مگابایت است."; busy = false; return@launch }
@@ -178,4 +180,16 @@ fun VerificationScreen(onBack: () -> Unit) {
             Spacer(Modifier.height(24.dp))
         }
     }
+}
+
+/** Reads at most [limit] bytes (enough to tell "too big" without loading the whole file). */
+private fun readCapped(input: java.io.InputStream, limit: Int): ByteArray {
+    val out = java.io.ByteArrayOutputStream()
+    val buf = ByteArray(64 * 1024)
+    while (out.size() < limit) {
+        val n = input.read(buf, 0, minOf(buf.size, limit - out.size()))
+        if (n <= 0) break
+        out.write(buf, 0, n)
+    }
+    return out.toByteArray()
 }

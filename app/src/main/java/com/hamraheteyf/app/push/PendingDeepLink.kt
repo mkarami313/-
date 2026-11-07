@@ -12,8 +12,10 @@ import kotlinx.coroutines.flow.StateFlow
 object PendingDeepLink {
     const val EXTRA_TYPE = "hamrah.notif.type"
     const val EXTRA_RELATED = "hamrah.notif.relatedId"
+    const val EXTRA_NOTIF_ID = "hamrah.notif.id"
 
-    data class Target(val type: String?, val relatedId: String?)
+    /** [notifId] is the server notification id, so opening it can also mark it read in the inbox. */
+    data class Target(val type: String?, val relatedId: String?, val notifId: String? = null)
 
     private val _target = MutableStateFlow<Target?>(null)
     val target: StateFlow<Target?> get() = _target
@@ -23,10 +25,12 @@ object PendingDeepLink {
         if (intent == null) return
         val type = intent.getStringExtra(EXTRA_TYPE)
         val related = intent.getStringExtra(EXTRA_RELATED)
-        if (type.isNullOrBlank() && related.isNullOrBlank()) return
+        val notifId = intent.getStringExtra(EXTRA_NOTIF_ID)
+        if (type.isNullOrBlank() && related.isNullOrBlank() && notifId.isNullOrBlank()) return
         intent.removeExtra(EXTRA_TYPE)
         intent.removeExtra(EXTRA_RELATED)
-        _target.value = Target(type, related)
+        intent.removeExtra(EXTRA_NOTIF_ID)
+        _target.value = Target(type, related, notifId)
     }
 
     fun consume() { _target.value = null }
