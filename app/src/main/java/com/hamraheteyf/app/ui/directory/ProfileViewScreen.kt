@@ -107,6 +107,7 @@ fun ProfileViewScreen(userId: String, onBack: () -> Unit, onOpenConversation: (S
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(message) { message?.let { snackbar.showSnackbar(it); vm.clearMessage() } }
     var confirmBlock by remember { mutableStateOf(false) }
+    var requesting by remember { mutableStateOf(false) }
 
     // Forum authors are not in the local snapshot: the server's public profile fills the gap (and adds stats).
     val client = rememberCommunity()
@@ -139,6 +140,12 @@ fun ProfileViewScreen(userId: String, onBack: () -> Unit, onOpenConversation: (S
             name = ru.name, photoUrl = ru.photoUrl, badge = ru.badge, expert = ru.expert,
             accountLabel = ru.accountType?.let { t -> runCatching { AccountType.valueOf(t).label }.getOrNull() },
             city = ru.city, bio = ru.bio, joinedAt = ru.joinedAt,
+        )
+        // The server hides people I blocked («کاربر پیدا نشد»), so a forum author I blocked has no profile to
+        // load — still show a minimal page, or the «برداشتنِ مسدودیت» button would be unreachable here.
+        state.blocked && remoteDone -> ProfileView(
+            name = "کاربرِ مسدودشده", photoUrl = null, badge = "", expert = false, accountLabel = null,
+            city = null, bio = null, joinedAt = null,
         )
         else -> null
     }
@@ -211,7 +218,10 @@ fun ProfileViewScreen(userId: String, onBack: () -> Unit, onOpenConversation: (S
                         OutlinedButton(onClick = { vm.unblock() }, modifier = Modifier.fillMaxWidth().heightIn(min = Dimens.touch)) { Text("برداشتنِ مسدودیت") }
                     } else {
                         Row(horizontalArrangement = Arrangement.spacedBy(Dimens.s)) {
-                            if (canMessage) Button(onClick = { vm.requestConversation(onOpenConversation) }, modifier = Modifier.weight(1f).heightIn(min = Dimens.touch)) {
+                            if (canMessage) Button(onClick = {
+                                requesting = true
+                                vm.requestConversation(onOpenConversation).invokeOnCompletion { requesting = false }
+                            }, enabled = !requesting, modifier = Modifier.weight(1f).heightIn(min = Dimens.touch)) {
                                 Icon(Icons.Outlined.Mail, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("پیام")
                             }
                             OutlinedButton(onClick = { confirmBlock = true }, modifier = Modifier.then(if (canMessage) Modifier else Modifier.weight(1f)).heightIn(min = Dimens.touch)) { Text("مسدود کردن") }

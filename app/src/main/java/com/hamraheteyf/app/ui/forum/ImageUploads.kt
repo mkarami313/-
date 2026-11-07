@@ -12,7 +12,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -47,16 +51,30 @@ class ImageUploads(private val client: CommunityClient?, private val context: Co
     fun remove(key: Long) { items = items.filterNot { it.key == key } }
 
     fun add(uris: List<Uri>) {
-        val c = client ?: return
-        uris.take(remaining).forEach { uri ->
+        if (client == null) return
+        uris.distinct().take(remaining).forEach { uri ->
             val a = Attachment(seq++, uri)
             items = items + a
-            scope.launch {
-                val r = c.uploadImage(context, uri)
-                items = items.map {
-                    if (it.key != a.key) it
-                    else when (r) { is ApiResult.Ok -> it.copy(id = r.data); is ApiResult.Fail -> it.copy(error = r.message) }
-                }
+            upload(a)
+        }
+    }
+
+    /** Tries a failed image again (it keeps its place in the strip). */
+    fun retry(key: Long) {
+        val a = items.firstOrNull { it.key == key && it.error != null && it.uri != null } ?: return
+        val fresh = a.copy(error = null)
+        items = items.map { if (it.key == key) fresh else it }
+        upload(fresh)
+    }
+
+    private fun upload(a: Attachment) {
+        val c = client ?: return
+        val uri = a.uri ?: return
+        scope.launch {
+            val r = c.uploadImage(context, uri)
+            items = items.map {
+                if (it.key != a.key) it
+                else when (r) { is ApiResult.Ok -> it.copy(id = r.data); is ApiResult.Fail -> it.copy(error = r.message) }
             }
         }
     }
@@ -92,20 +110,31 @@ fun AttachmentStrip(uploads: ImageUploads, client: CommunityClient?, modifier: M
                 val boxMod = Modifier.fillMaxSize().clip(shape)
                 when {
                     a.id != null && client != null -> RemoteImage(client.fileUrl(a.id), boxMod)
-                    a.error != null -> Box(boxMod.background(MaterialTheme.colorScheme.errorContainer), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Outlined.ErrorOutline, a.error, tint = MaterialTheme.colorScheme.error)
+                    a.error != null -> Box(
+                        boxMod.background(MaterialTheme.colorScheme.errorContainer)
+                            .clickable(onClickLabel = "تلاشِ دوباره") { uploads.retry(a.key) }
+                            .semantics { contentDescription = "${a.error} برای تلاشِ دوباره بزنید." },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(Icons.Outlined.Refresh, null, tint = MaterialTheme.colorScheme.error)
                     }
                     else -> Box(boxMod.background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
                     }
                 }
+                // 22dp visual badge inside a 36dp touch area in the corner (the thumbnail itself is only 56–76dp).
                 Box(
-                    Modifier.align(Alignment.TopEnd).padding(2.dp).size(22.dp).clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.inverseSurface.copy(alpha = 0.7f)),
-                    contentAlignment = Alignment.Center,
+                    Modifier.align(Alignment.TopEnd).size(36.dp)
+                        .clickable(role = Role.Button, onClickLabel = "حذفِ تصویر") { uploads.remove(a.key) }
+                        .semantics { contentDescription = "حذفِ تصویر" },
+                    contentAlignment = Alignment.TopEnd,
                 ) {
-                    IconButton(onClick = { uploads.remove(a.key) }, modifier = Modifier.size(22.dp)) {
-                        Icon(Icons.Outlined.Close, "حذفِ تصویر", tint = MaterialTheme.colorScheme.inverseOnSurface, modifier = Modifier.size(14.dp))
+                    Box(
+                        Modifier.padding(2.dp).size(22.dp).clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.inverseSurface.copy(alpha = 0.7f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(Icons.Outlined.Close, null, tint = MaterialTheme.colorScheme.inverseOnSurface, modifier = Modifier.size(14.dp))
                     }
                 }
             }

@@ -37,14 +37,16 @@ fun ImageGrid(ids: List<String>, client: CommunityClient?, modifier: Modifier = 
     val shape = RoundedCornerShape(10.dp)
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         if (ids.size == 1) {
-            RemoteImage(client.fileUrl(ids[0]), Modifier.fillMaxWidth().aspectRatio(16f / 10f).clip(shape).clickable { open = 0 })
+            RemoteImage(client.fileUrl(ids[0]), Modifier.fillMaxWidth().aspectRatio(16f / 10f).clip(shape).clickable(onClickLabel = "بزرگ‌نمایی") { open = 0 },
+                contentDescription = "تصویر")
         } else {
             val perRow = if (ids.size == 2 || ids.size == 4) 2 else 3
             ids.chunked(perRow).forEachIndexed { r, row ->
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     row.forEachIndexed { c, id ->
                         val index = r * perRow + c
-                        RemoteImage(client.fileUrl(id), Modifier.weight(1f).aspectRatio(1f).clip(shape).clickable { open = index })
+                        RemoteImage(client.fileUrl(id), Modifier.weight(1f).aspectRatio(1f).clip(shape).clickable(onClickLabel = "بزرگ‌نمایی") { open = index },
+                            contentDescription = "تصویرِ ${(index + 1).toPersianDigits()} از ${ids.size.toPersianDigits()}")
                     }
                     repeat(perRow - row.size) { Spacer(Modifier.weight(1f)) }
                 }

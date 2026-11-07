@@ -101,7 +101,7 @@ object Jalali {
 
     // ---- ISO ("yyyy-MM-dd") helpers ----
 
-    fun iso(y: Ymd) = "%04d-%02d-%02d".format(y.y, y.m, y.d)
+    fun iso(y: Ymd) = "%04d-%02d-%02d".format(java.util.Locale.US, y.y, y.m, y.d)
 
     fun parseIso(s: String): Ymd? {
         val p = s.trim().take(10).split('-')
@@ -114,12 +114,12 @@ object Jalali {
 
     fun todayIso(): String {
         val c = Calendar.getInstance()
-        return "%04d-%02d-%02d".format(c.get(Calendar.YEAR), c.get(Calendar.MONTH) + 1, c.get(Calendar.DAY_OF_MONTH))
+        return "%04d-%02d-%02d".format(java.util.Locale.US, c.get(Calendar.YEAR), c.get(Calendar.MONTH) + 1, c.get(Calendar.DAY_OF_MONTH))
     }
 
     fun nowTime(): String {
         val c = Calendar.getInstance()
-        return "%02d:%02d".format(c.get(Calendar.HOUR_OF_DAY), c.get(Calendar.MINUTE))
+        return "%02d:%02d".format(java.util.Locale.US, c.get(Calendar.HOUR_OF_DAY), c.get(Calendar.MINUTE))
     }
 
     fun isoToJalali(iso: String): Ymd? = parseIso(iso)?.let { toJalali(it.y, it.m, it.d) }
@@ -127,7 +127,7 @@ object Jalali {
     fun jalaliToIso(jy: Int, jm: Int, jd: Int): String = iso(toGregorian(jy, jm, jd))
 
     /** "۱۴۰۵/۰۸/۱۰" */
-    fun format(j: Ymd): String = "%04d/%02d/%02d".format(j.y, j.m, j.d).toPersianDigits()
+    fun format(j: Ymd): String = "%04d/%02d/%02d".format(java.util.Locale.US, j.y, j.m, j.d).toPersianDigits()
 
     /** ISO gregorian -> "۱۴۰۵/۰۸/۱۰" (or the input unchanged if unparseable). */
     fun display(iso: String): String = isoToJalali(iso)?.let { format(it) } ?: iso
@@ -159,7 +159,7 @@ object Jalali {
     fun findTimeInText(text: String): String? {
         val m = Regex("(\\d{1,2})\\s*[:٫]\\s*(\\d{2})").find(asciiDigits(text)) ?: return null
         val h = m.groupValues[1].toInt(); val mi = m.groupValues[2].toInt()
-        return if (h in 0..23 && mi in 0..59) "%02d:%02d".format(h, mi) else null
+        return if (h in 0..23 && mi in 0..59) "%02d:%02d".format(java.util.Locale.US, h, mi) else null
     }
 
     /** Epoch millis (device time zone) for ISO date + "HH:mm"; null if unparseable. */
@@ -247,7 +247,7 @@ fun TimePickerDialogFa(initial: String, onDismiss: () -> Unit, onPick: (String) 
         onDismissRequest = onDismiss,
         title = { Text("انتخاب ساعت") },
         text = { Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { TimePicker(state) } },
-        confirmButton = { TextButton(onClick = { onPick("%02d:%02d".format(state.hour, state.minute)) }) { Text("تأیید") } },
+        confirmButton = { TextButton(onClick = { onPick("%02d:%02d".format(java.util.Locale.US, state.hour, state.minute)) }) { Text("تأیید") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("انصراف") } },
     )
 }

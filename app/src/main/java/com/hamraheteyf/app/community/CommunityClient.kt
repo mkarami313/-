@@ -482,10 +482,18 @@ class CommunityClient(val api: HamrahApi) {
     }, GroupDirectory.serializer())
 
     suspend fun groupInfo(id: String) = get("groupInfo", buildJsonObject { put("groupId", id) }, GroupInfo.serializer())
-    suspend fun groupUpdate(id: String, title: String, description: String, rules: String, city: String, visibility: String, coverId: String?) =
+    /**
+     * The server rewrites category and ageBand on every update (missing = cleared), so callers that
+     * don't edit them must pass the values they loaded to keep them.
+     */
+    suspend fun groupUpdate(
+        id: String, title: String, description: String, rules: String, city: String, visibility: String, coverId: String?,
+        category: String? = null, ageBand: String? = null,
+    ) =
         done("groupUpdate", buildJsonObject {
             put("groupId", id); put("title", title); put("description", description); put("rules", rules)
             put("city", city); put("visibility", visibility); put("coverId", coverId ?: "")
+            category?.let { put("category", it) }; ageBand?.let { put("ageBand", it) }
         })
     suspend fun groupArchive(id: String) = done("groupArchive", buildJsonObject { put("groupId", id) })
     suspend fun groupSetRole(id: String, userId: String, role: String) = done("groupSetRole", buildJsonObject { put("groupId", id); put("userId", userId); put("role", role) })

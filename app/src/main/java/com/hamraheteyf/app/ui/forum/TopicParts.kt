@@ -155,7 +155,7 @@ fun PostCard(
             TextButton(onClick = onQuote) {
                 Icon(Icons.Outlined.FormatQuote, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("نقلِ قول")
             }
-            if (canAccept && !post.mine) {
+            if (canAccept && !post.mine && post.status == "PUBLISHED") {
                 TextButton(onClick = onAccept, colors = ButtonDefaults.textButtonColors(contentColor = VerifiedGreen)) {
                     Icon(if (post.accepted) Icons.Outlined.RemoveDone else Icons.Outlined.Done, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(4.dp))

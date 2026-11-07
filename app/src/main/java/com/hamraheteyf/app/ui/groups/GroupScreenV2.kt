@@ -73,6 +73,9 @@ fun GroupScreen(
     val g = info
     val member = g?.myStatus == "ACTIVE"
     val canSee = g != null && (g.group.visibility != "PRIVATE" || member || g.canManage)
+    // approveMember / removeMember need an ACTIVE owner/moderator membership on the server; a site admin
+    // who only "canManage" (groupInfo) would just get «اجازهٔ مدیریت … را ندارید». Show those tools to real managers.
+    val memberManager = member && (g?.myRole == "OWNER" || g?.myRole == "MODERATOR")
     val feed = rememberTopicFeed(client, groupId, canSee) { page ->
         if (!canSee) ApiResult.Ok(TopicList()) else client?.topics(groupId = groupId, page = page) ?: ApiResult.Fail("اتصال به سرور برقرار نیست.")
     }
@@ -138,18 +141,19 @@ fun GroupScreen(
                         }
                         return@LazyColumn
                     }
+                    val tabs = GroupTab.entries.filter { it != GroupTab.REQUESTS || memberManager }
+                    val shown = if (tab in tabs) tab else GroupTab.TOPICS  // e.g. lost the moderator role meanwhile
                     stickyHeader(key = "tabs") {
-                        val tabs = GroupTab.entries.filter { it != GroupTab.REQUESTS || g.canManage }
-                        TabRow(selectedTabIndex = tabs.indexOf(tab).coerceAtLeast(0), containerColor = MaterialTheme.colorScheme.surface) {
+                        TabRow(selectedTabIndex = tabs.indexOf(shown).coerceAtLeast(0), containerColor = MaterialTheme.colorScheme.surface) {
                             tabs.forEach { t ->
-                                Tab(t == tab, { tabName = t.name }, text = {
+                                Tab(t == shown, { tabName = t.name }, text = {
                                     val n = when (t) { GroupTab.MEMBERS -> g.members.size; GroupTab.REQUESTS -> g.requests.size; else -> 0 }
                                     Text(if (n > 0) "${t.label} (${n.toPersianDigits()})" else t.label)
                                 })
                             }
                         }
                     }
-                    when (tab) {
+                    when (shown) {
                         GroupTab.TOPICS -> {
                             item(key = "gap") { Spacer(Modifier.height(Dimens.xs)) }
                             topicFeedItems(
@@ -159,7 +163,7 @@ fun GroupScreen(
                             )
                         }
                         GroupTab.MEMBERS -> item(key = "members") {
-                            MembersCard(g, myId, onOpenProfile,
+                            MembersCard(g, myId, memberManager, busy, onOpenProfile,
                                 onRole = { p, role, label -> act({ it.groupSetRole(groupId, p.id, role) }, label) },
                                 onTransfer = { p ->
                                     pending = Pending("واگذاریِ مدیریت", "مدیریتِ گروه به «${p.name}» واگذار می‌شود و شما ناظر می‌شوید.", "واگذاری", destructive = false) {
@@ -174,7 +178,7 @@ fun GroupScreen(
                             )
                         }
                         GroupTab.REQUESTS -> item(key = "requests") {
-                            RequestsCard(g, onOpenProfile,
+                            RequestsCard(g, busy, onOpenProfile,
                                 onApprove = { p -> act({ it.approve(groupId, p.id) }, "«${p.name}» عضو شد.") },
                                 onReject = { p -> act({ it.removeMember(groupId, p.id) }, "درخواست رد شد.") },
                             )
@@ -214,7 +218,7 @@ private fun GroupMenu(g: GroupInfo, onEdit: () -> Unit, onArchive: () -> Unit, o
 
 @Composable
 private fun MembersCard(
-    g: GroupInfo, myId: String?, onOpenProfile: (String) -> Unit,
+    g: GroupInfo, myId: String?, manager: Boolean, busy: Boolean, onOpenProfile: (String) -> Unit,
     onRole: (Person, String, String) -> Unit, onTransfer: (Person) -> Unit, onRemove: (Person) -> Unit,
 ) {
     AppCard(Modifier.padding(Dimens.gutter), padding = PaddingValues(vertical = Dimens.xs)) {
@@ -224,13 +228,14 @@ private fun MembersCard(
         g.members.forEachIndexed { i, p ->
             if (i > 0) InsetDivider(60.dp)
             val self = p.id == myId
-            val ownerMenu = g.isOwner && !self && p.role != "OWNER"
-            val modMenu = !g.isOwner && g.canManage && !self && p.role == "MEMBER"
+            val real = p.id.isNotEmpty()  // deleted accounts come back with an empty id
+            val ownerMenu = g.isOwner && manager && real && !self && p.role != "OWNER"
+            val modMenu = !g.isOwner && manager && real && !self && p.role == "MEMBER"
             MemberRow(p, onClick = { if (p.id.isNotEmpty()) onOpenProfile(p.id) }) {
                 if (ownerMenu || modMenu) {
                     var open by remember { mutableStateOf(false) }
                     Box {
-                        IconButton(onClick = { open = true }) { Icon(Icons.Outlined.MoreVert, "مدیریتِ عضو", tint = muted()) }
+                        IconButton(onClick = { open = true }, enabled = !busy) { Icon(Icons.Outlined.MoreVert, "مدیریتِ ${p.name}", tint = muted()) }
                         DropdownMenu(open, { open = false }) {
                             if (ownerMenu) {
                                 if (p.role == "MODERATOR") DropdownMenuItem({ Text("عضوِ عادی") }, { open = false; onRole(p, "MEMBER", "«${p.name}» عضوِ عادی شد.") })
@@ -247,7 +252,7 @@ private fun MembersCard(
 }
 
 @Composable
-private fun RequestsCard(g: GroupInfo, onOpenProfile: (String) -> Unit, onApprove: (Person) -> Unit, onReject: (Person) -> Unit) {
+private fun RequestsCard(g: GroupInfo, busy: Boolean, onOpenProfile: (String) -> Unit, onApprove: (Person) -> Unit, onReject: (Person) -> Unit) {
     if (g.requests.isEmpty()) {
         EmptyView(Icons.Outlined.HowToReg, "درخواستی در انتظار نیست", "درخواست‌های عضویت در گروهِ خصوصی این‌جا می‌آیند."); return
     }
@@ -255,8 +260,8 @@ private fun RequestsCard(g: GroupInfo, onOpenProfile: (String) -> Unit, onApprov
         g.requests.forEachIndexed { i, p ->
             if (i > 0) InsetDivider(60.dp)
             MemberRow(p, onClick = { if (p.id.isNotEmpty()) onOpenProfile(p.id) }) {
-                TextButton(onClick = { onReject(p) }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text("رد") }
-                FilledTonalButton(onClick = { onApprove(p) }) { Text("پذیرش") }
+                TextButton(onClick = { onReject(p) }, enabled = !busy && p.id.isNotEmpty(), colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text("رد") }
+                FilledTonalButton(onClick = { onApprove(p) }, enabled = !busy && p.id.isNotEmpty()) { Text("پذیرش") }
             }
         }
     }

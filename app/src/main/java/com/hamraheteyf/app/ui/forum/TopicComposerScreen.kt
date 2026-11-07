@@ -55,6 +55,7 @@ fun TopicComposerScreen(
 
     var origTitle by rememberSaveable { mutableStateOf("") }
     var origBody by rememberSaveable { mutableStateOf("") }
+    var origImages by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
     var editLoaded by rememberSaveable { mutableStateOf(false) }
     var editGroup by rememberSaveable { mutableStateOf<String?>(null) }
     var loadError by remember { mutableStateOf<String?>(null) }
@@ -76,6 +77,7 @@ fun TopicComposerScreen(
                         title = t.title; body = t.body; origTitle = t.title; origBody = t.body
                         chosenForum = t.forumId; editGroup = t.groupId; editLoaded = true
                     }
+                    origImages = ArrayList(t.images)
                     uploads.setExisting(t.images)
                 }
                 is ApiResult.Fail -> loadError = r.message
@@ -83,15 +85,20 @@ fun TopicComposerScreen(
         }
     }
     LaunchedEffect(editTopicId) { if (editing) loadEdit() }
-    LaunchedEffect(groupId) {
-        if (groupId != null) (client?.groupInfo(groupId) as? ApiResult.Ok)?.let { groupTitle = it.data.group.title }
+    // The group's name for the «در گروهِ …» line — also when editing a group topic (editGroup).
+    val anyGroup = groupId ?: editGroup
+    LaunchedEffect(anyGroup) {
+        if (anyGroup != null) (client?.groupInfo(anyGroup) as? ApiResult.Ok)?.let { groupTitle = it.data.group.title }
     }
 
     val inGroup = groupId != null || editGroup != null
     val forum = remember(tree, chosenForum) { ForumTreeCache.find(chosenForum) }
     val clinicForum = remember(tree, chosenForum) { chosenForum != null && ForumTreeCache.isClinic(chosenForum) }
     val clinic = !inGroup && clinicForum
-    val dirty = if (editing) title != origTitle || body != origBody else title.isNotBlank() || body.isNotBlank() || uploads.items.isNotEmpty()
+    val dirty = if (editing) title != origTitle || body != origBody || uploads.ids != origImages || uploads.busy
+        else title.isNotBlank() || body.isNotBlank() || uploads.items.isNotEmpty()
+    // Clinic questions carry no poll (the switch is hidden there); a poll set up before switching forum must not leak in.
+    val withPoll = pollOn && !clinic && !editing
 
     val titleErr = when {
         title.trim().length < TITLE_MIN -> "عنوان دست‌کم ${TITLE_MIN.toPersianDigits()} نویسه باشد."
@@ -111,8 +118,8 @@ fun TopicComposerScreen(
             titleErr != null -> titleErr
             bodyErr != null -> bodyErr
             uploads.busy -> "صبر کنید تا بارگذاریِ تصاویر تمام شود."
-            uploads.hasFailed -> "تصویرِ ناموفق را حذف کنید."
-            pollOn && pollOptions.count { it.isNotBlank() } < 2 -> "نظرسنجی دست‌کم دو گزینه لازم دارد."
+            uploads.hasFailed -> "روی تصویرِ ناموفق بزنید تا دوباره فرستاده شود، یا حذفش کنید."
+            withPoll && pollOptions.count { it.isNotBlank() } < 2 -> "نظرسنجی دست‌کم دو گزینه لازم دارد."
             else -> null
         }
         if (problem != null) { scope.launch { snack.showSnackbar(problem) }; return }
@@ -125,7 +132,7 @@ fun TopicComposerScreen(
             } else c.createTopic(
                 title.trim(), body.trim(), forumId = if (groupId == null) chosenForum else null, groupId = groupId,
                 images = uploads.ids, anonymous = anonymous && groupId == null,
-                poll = if (pollOn) PollDraft(pollQ.trim(), pollOptions.map { it.trim() }.filter { it.isNotEmpty() }, pollMulti, pollDays) else null,
+                poll = if (withPoll) PollDraft(pollQ.trim(), pollOptions.map { it.trim() }.filter { it.isNotEmpty() }, pollMulti, pollDays) else null,
             )
             when (r) {
                 is ApiResult.Ok -> { origTitle = title; origBody = body; uploads.clear(); onDone(r.data) }

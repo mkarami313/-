@@ -70,10 +70,17 @@ fun TopicScreen(
 
     fun toast(msg: String) { scope.launch { snack.showSnackbar(msg) } }
 
+    // One load at a time: a resume-refresh finishing after a page jump must not overwrite it.
+    var loadJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    // Toggles (like/bookmark/follow) already on their way; a second tap would un-toggle on the server.
+    val inFlight = remember { mutableSetOf<String>() }
+    var savingEdit by remember { mutableStateOf(false) }
+
     fun load(p: Int?, scroll: Scroll = Scroll.NONE) {
         val c = client ?: run { error = "اتصال به سرور برقرار نیست."; return }
         loading = true
-        scope.launch {
+        loadJob?.cancel()
+        loadJob = scope.launch {
             when (val r = c.topic(topicId, p)) {
                 is ApiResult.Ok -> {
                     data = r.data; error = null; page = r.data.page
@@ -104,6 +111,16 @@ fun TopicScreen(
         scope.launch { when (val r = call(c)) { is ApiResult.Ok -> ok(r.data); is ApiResult.Fail -> toast(r.message) } }
     }
 
+    /** [act] for a server-side toggle: ignored while the same toggle is still in flight. */
+    fun <T> toggle(key: String, call: suspend (CommunityClient) -> ApiResult<T>, ok: (T) -> Unit) {
+        val c = client ?: return
+        if (!inFlight.add(key)) return
+        scope.launch {
+            try { when (val r = call(c)) { is ApiResult.Ok -> ok(r.data); is ApiResult.Fail -> toast(r.message) } }
+            finally { inFlight.remove(key) }
+        }
+    }
+
     val d = data
     val t = d?.topic
     val clinic = d?.forum?.kind == "clinic"
@@ -127,8 +144,8 @@ fun TopicScreen(
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "بازگشت") } },
                 actions = {
                     if (t != null) TopicMenu(
-                        t, onFollow = { act({ it.follow(t.id) }) { f -> data = data?.let { it.copy(topic = it.topic.copy(followed = f)) }; toast(if (f) "پاسخ‌های تازه را خبر می‌دهیم." else "دنبال کردن لغو شد.") } },
-                        onBookmark = { act({ it.bookmark(t.id) }) { b -> data = data?.let { it.copy(topic = it.topic.copy(bookmarked = b)) }; toast(if (b) "نشان شد." else "نشان برداشته شد.") } },
+                        t, onFollow = { toggle("follow", { it.follow(t.id) }) { f -> data = data?.let { it.copy(topic = it.topic.copy(followed = f)) }; toast(if (f) "پاسخ‌های تازه را خبر می‌دهیم." else "دنبال کردن لغو شد.") } },
+                        onBookmark = { toggle("bookmark", { it.bookmark(t.id) }) { b -> data = data?.let { it.copy(topic = it.topic.copy(bookmarked = b)) }; toast(if (b) "نشان شد." else "نشان برداشته شد.") } },
                         onShare = {
                             val send = Intent(Intent.ACTION_SEND).setType("text/plain")
                                 .putExtra(Intent.EXTRA_SUBJECT, t.title).putExtra(Intent.EXTRA_TEXT, "${t.title}\n\n${t.body}\n\n— همراهِ طیف")
@@ -149,7 +166,7 @@ fun TopicScreen(
                 uploads = uploads, client = client, sending = sending,
                 onSend = {
                     val c = client ?: return@ReplyComposer
-                    if (uploads.hasFailed) { toast("تصویرِ ناموفق را حذف کنید یا دوباره بفرستید."); return@ReplyComposer }
+                    if (uploads.hasFailed) { toast("روی تصویرِ ناموفق بزنید تا دوباره فرستاده شود، یا حذفش کنید."); return@ReplyComposer }
                     sending = true
                     scope.launch {
                         when (val r = c.reply(topicId, text.trim(), quote?.id, uploads.ids)) {
@@ -177,7 +194,7 @@ fun TopicScreen(
                     OpeningPostCard(
                         t, client, collapsed = d.page > 0 && !openingExpanded, onToggle = { openingExpanded = true },
                         onOpenProfile = onOpenProfile,
-                        onLike = { act({ it.like(t.id) }) { (liked, n) -> data = data?.let { it.copy(topic = it.topic.copy(liked = liked, likeCount = n)) } } },
+                        onLike = { toggle("like:" + t.id, { it.like(t.id) }) { (liked, n) -> data = data?.let { it.copy(topic = it.topic.copy(liked = liked, likeCount = n)) } } },
                         onQuote = { quote = QuoteRef(t.id, t.author.name, t.body.take(160)) },
                         poll = {
                             t.poll?.let { poll ->
@@ -216,12 +233,12 @@ fun TopicScreen(
                         p, d.page * PAGE_POSTS + i + 1, client, t.canAccept,
                         onOpenProfile = onOpenProfile,
                         onLike = {
-                            act({ it.like(p.id) }) { (liked, n) ->
+                            toggle("like:" + p.id, { it.like(p.id) }) { (liked, n) ->
                                 data = data?.let { cur -> cur.copy(posts = cur.posts.map { if (it.id == p.id) it.copy(liked = liked, likeCount = n) else it }) }
                             }
                         },
                         onQuote = { quote = QuoteRef(p.id, p.author.name, p.body.take(160)) },
-                        onAccept = { act({ it.moderate(t.id, "accept", postId = p.id) }) { load(d.page) } },
+                        onAccept = { toggle("accept", { it.moderate(t.id, "accept", postId = p.id) }) { load(d.page) } },
                         onEdit = { editPost = p },
                         onDelete = { deleteId = p.id },
                         onReport = { reportTarget = "POST" to p.id },
@@ -249,8 +266,16 @@ fun TopicScreen(
             onDismiss = { deleteId = null },
         )
     }
-    editPost?.let { p -> EditPostDialog(p, onDismiss = { editPost = null }) { body ->
-        act({ it.edit(p.id, body) }) { editPost = null; load(page) }
+    editPost?.let { p -> EditPostDialog(p, saving = savingEdit, onDismiss = { editPost = null }) { body ->
+        val c = client ?: return@EditPostDialog
+        savingEdit = true
+        scope.launch {
+            when (val r = c.edit(p.id, body)) {
+                is ApiResult.Ok -> { editPost = null; load(page) }
+                is ApiResult.Fail -> toast(r.message)  // the dialog stays open with the text
+            }
+            savingEdit = false
+        }
     } }
 }
 
@@ -288,13 +313,17 @@ private fun TopicMenu(
 }
 
 @Composable
-private fun EditPostDialog(post: ForumPost, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+private fun EditPostDialog(post: ForumPost, saving: Boolean, onDismiss: () -> Unit, onSave: (String) -> Unit) {
     var body by rememberSaveable(post.id) { mutableStateOf(post.body) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("ویرایشِ پاسخ") },
-        text = { OutlinedTextField(body, { body = it }, Modifier.fillMaxWidth().heightIn(min = 120.dp), maxLines = 10) },
-        confirmButton = { TextButton(onClick = { onSave(body.trim()) }, enabled = body.isNotBlank() && body.trim() != post.body) { Text("ذخیره") } },
+        text = { OutlinedTextField(body, { body = it.take(10_000) }, Modifier.fillMaxWidth().heightIn(min = 120.dp), maxLines = 10, enabled = !saving) },
+        confirmButton = {
+            TextButton(onClick = { onSave(body.trim()) }, enabled = !saving && body.isNotBlank() && body.trim() != post.body) {
+                if (saving) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp) else Text("ذخیره")
+            }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text("انصراف") } },
     )
 }

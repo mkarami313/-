@@ -72,6 +72,7 @@ fun ReviewsSection(targetType: String, targetId: String, canReview: Boolean) {
     var error by remember(targetType, targetId) { mutableStateOf<String?>(null) }
     var editing by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var saving by remember { mutableStateOf(false) }
     LaunchedEffect(client, targetType, targetId, tick) {
         if (client == null) { error = "نظرها در حالتِ آفلاین در دسترس نیست."; return@LaunchedEffect }
         when (val r = client.reviews(targetType, targetId)) {
@@ -118,12 +119,15 @@ fun ReviewsSection(targetType: String, targetId: String, canReview: Boolean) {
         }
     }
 
-    if (editing && client != null) ReviewDialog(mine, onDismiss = { editing = false }) { rating, text ->
+    if (editing && client != null) ReviewDialog(mine, saving, onDismiss = { editing = false }) { rating, text ->
+        if (saving) return@ReviewDialog
+        saving = true
         scope.launch {
             when (val r = client.saveReview(targetType, targetId, rating, text)) {
                 is ApiResult.Ok -> { editing = false; tick++; Toast.makeText(ctx, "نظرِ شما ثبت شد.", Toast.LENGTH_SHORT).show() }
                 is ApiResult.Fail -> Toast.makeText(ctx, r.message, Toast.LENGTH_LONG).show()
             }
+            saving = false
         }
     }
     if (confirmDelete && client != null) AlertDialog(
@@ -164,10 +168,9 @@ private fun ReviewRow(r: Review, onEdit: () -> Unit, onDelete: () -> Unit) {
 }
 
 @Composable
-private fun ReviewDialog(mine: Review?, onDismiss: () -> Unit, onSave: (Int, String) -> Unit) {
+private fun ReviewDialog(mine: Review?, saving: Boolean, onDismiss: () -> Unit, onSave: (Int, String) -> Unit) {
     var rating by rememberSaveable { mutableIntStateOf(mine?.rating ?: 0) }
     var text by rememberSaveable { mutableStateOf(mine?.body.orEmpty()) }
-    var saving by remember { mutableStateOf(false) }
     val labels = listOf("", "ضعیف", "متوسط", "خوب", "خیلی خوب", "عالی")
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -175,8 +178,8 @@ private fun ReviewDialog(mine: Review?, onDismiss: () -> Unit, onSave: (Int, Str
         text = {
             Column {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                    for (i in 1..5) IconButton(onClick = { rating = i }) {
-                        Icon(if (i <= rating) Icons.Filled.Star else Icons.Outlined.StarOutline, "$i ستاره", tint = Gold, modifier = Modifier.size(32.dp))
+                    for (i in 1..5) IconButton(onClick = { rating = i }, enabled = !saving) {
+                        Icon(if (i <= rating) Icons.Filled.Star else Icons.Outlined.StarOutline, "${i.toPersianDigits()} ستاره", tint = Gold, modifier = Modifier.size(32.dp))
                     }
                 }
                 Text(if (rating == 0) "امتیاز را انتخاب کنید" else labels[rating], style = MaterialTheme.typography.labelLarge,
@@ -188,10 +191,10 @@ private fun ReviewDialog(mine: Review?, onDismiss: () -> Unit, onSave: (Int, Str
             }
         },
         confirmButton = {
-            TextButton(onClick = { saving = true; onSave(rating, text.trim()) }, enabled = rating in 1..5 && !saving) { Text("ثبت") }
+            TextButton(onClick = { onSave(rating, text.trim()) }, enabled = rating in 1..5 && !saving) {
+                if (saving) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp) else Text("ثبت")
+            }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("انصراف") } },
     )
-    // a failed save re-enables the button
-    LaunchedEffect(saving) { if (saving) { kotlinx.coroutines.delay(2500); saving = false } }
 }

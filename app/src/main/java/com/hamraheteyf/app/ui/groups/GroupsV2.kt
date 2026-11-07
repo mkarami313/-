@@ -51,6 +51,7 @@ fun GroupsHubScreen(onBack: (() -> Unit)?, onOpenGroup: (String) -> Unit, onCrea
     val listState = rememberLazyListState()
 
     LaunchedEffect(mine, query, city, reload) {
+        if (items == null) error = null  // a new tab/filter shows the spinner, not the previous failure
         if (query.isNotBlank()) delay(350)  // debounce typing
         val c = client ?: run { error = "اتصال به سرور برقرار نیست."; return@LaunchedEffect }
         when (val r = c.groupDirectory(q = query.trim(), city = city, my = mine)) {
@@ -123,6 +124,9 @@ fun GroupEditScreen(groupId: String?, onBack: () -> Unit, onSaved: (String) -> U
     var city by rememberSaveable { mutableStateOf("") }
     var isPrivate by rememberSaveable { mutableStateOf(false) }
     var coverId by rememberSaveable { mutableStateOf<String?>(null) }
+    // Not editable here, but groupUpdate clears whatever isn't sent — carry them through.
+    var category by rememberSaveable { mutableStateOf<String?>(null) }
+    var ageBand by rememberSaveable { mutableStateOf<String?>(null) }
     var loaded by rememberSaveable { mutableStateOf(!editing) }
     var loadError by remember { mutableStateOf<String?>(null) }
     var saving by remember { mutableStateOf(false) }
@@ -138,7 +142,8 @@ fun GroupEditScreen(groupId: String?, onBack: () -> Unit, onSaved: (String) -> U
             when (val r = c.groupInfo(id)) {
                 is ApiResult.Ok -> r.data.group.let {
                     title = it.title; description = it.description; rules = it.rules; city = it.city.orEmpty()
-                    isPrivate = it.visibility == "PRIVATE"; coverId = it.coverId; loaded = true
+                    isPrivate = it.visibility == "PRIVATE"; coverId = it.coverId
+                    category = it.category; ageBand = it.ageBand; loaded = true
                 }
                 is ApiResult.Fail -> loadError = r.message
             }
@@ -160,7 +165,7 @@ fun GroupEditScreen(groupId: String?, onBack: () -> Unit, onSaved: (String) -> U
         }
     }
 
-    fun leave() { if (dirty) confirmLeave = true else onBack() }
+    fun leave() { if (dirty && !saving) confirmLeave = true else onBack() }
     BackHandler(enabled = dirty && !saving) { confirmLeave = true }
 
     fun save() {
@@ -175,7 +180,7 @@ fun GroupEditScreen(groupId: String?, onBack: () -> Unit, onSaved: (String) -> U
         scope.launch {
             val vis = if (isPrivate) "PRIVATE" else "PUBLIC"
             val r: ApiResult<String> = if (groupId != null) {
-                when (val u = c.groupUpdate(groupId, title.trim(), description.trim(), rules.trim(), city.trim(), vis, coverId)) {
+                when (val u = c.groupUpdate(groupId, title.trim(), description.trim(), rules.trim(), city.trim(), vis, coverId, category, ageBand)) {
                     is ApiResult.Ok -> ApiResult.Ok(groupId); is ApiResult.Fail -> u
                 }
             } else c.createGroup(title.trim(), description.trim(), vis, city.trim(), rules.trim())

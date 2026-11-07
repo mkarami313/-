@@ -115,16 +115,17 @@ fun SectionTitle(text: String, modifier: Modifier = Modifier, action: String? = 
     }
 }
 
+private val AvatarPalette = listOf(Color(0xFF0E6E62), Color(0xFFE8794A), Color(0xFF3B5BDB), Color(0xFFC2255C), Color(0xFF2B8A3E), Color(0xFF7048E8))
+private val FileIdRe = Regex("([0-9a-f]{32})")
+
 /** Photo avatar when the user has one, else a tinted initial. */
 @Composable
 fun UserAvatar(name: String, photoUrl: String?, size: Dp = Dimens.avatar, anonymous: Boolean = false) {
-    val palette = listOf(Color(0xFF0E6E62), Color(0xFFE8794A), Color(0xFF3B5BDB), Color(0xFFC2255C), Color(0xFF2B8A3E), Color(0xFF7048E8))
-    val c = if (anonymous) Color(0xFF868E96) else palette[(name.hashCode() and 0x7fffffff) % palette.size]
+    val c = if (anonymous) Color(0xFF868E96) else AvatarPalette[(name.hashCode() and 0x7fffffff) % AvatarPalette.size]
     val wantsPhoto = !photoUrl.isNullOrBlank() && !anonymous
+    // Only touch the container when there is a photo: previews/screenshots render initials without one.
     val api = if (wantsPhoto) LocalAppContainer.current.serverApi else null
-    val url = photoUrl?.takeIf { wantsPhoto }?.let { p ->
-        Regex("([0-9a-f]{32})").find(p)?.groupValues?.get(1)?.let { id -> api?.fileUrl(id) } ?: p
-    }
+    val url = photoUrl?.takeIf { wantsPhoto }?.let { p -> FileIdRe.find(p)?.groupValues?.get(1)?.let { id -> api?.fileUrl(id) } ?: p }
     Box(Modifier.size(size).clip(CircleShape).background(c.copy(alpha = 0.14f)), contentAlignment = Alignment.Center) {
         if (url != null) RemoteImage(url, Modifier.fillMaxSize())
         else if (anonymous) Icon(Icons.Outlined.PersonOff, null, tint = c, modifier = Modifier.size(size * 0.55f))

@@ -37,25 +37,46 @@ class TopicFeed(private val scope: CoroutineScope, private val fetch: suspend (I
     var loadingMore by mutableStateOf(false); private set
     var refreshing by mutableStateOf(false); private set
     var error by mutableStateOf<String?>(null); private set
-    private var page = 0
+    /** Index of the last page loaded; part of the footer key so a page of duplicates still advances. */
+    var page by mutableStateOf(0); private set
     private var job: Job? = null
 
     val initialLoading get() = !loaded && error == null
 
-    /** [pull] shows the pull-to-refresh spinner; otherwise a loaded list refreshes silently. */
+    /**
+     * [pull] shows the pull-to-refresh spinner and starts over from page 0. A silent refresh (on
+     * resume) re-fetches every page already shown (up to [SILENT_PAGES]) so coming back from a
+     * topic doesn't cut the list the user scrolled through down to its first page.
+     */
     fun refresh(pull: Boolean = false) {
         job?.cancel()
         if (pull) refreshing = true
         if (!loaded) error = null
         loadingMore = false
+        val upTo = if (pull || !loaded) 0 else page.coerceAtMost(SILENT_PAGES - 1)
         job = scope.launch {
-            when (val r = fetch(0)) {
-                is ApiResult.Ok -> { items = r.data.items; hasMore = r.data.hasMore; page = 0; error = null; loaded = true }
-                is ApiResult.Fail -> if (!loaded) error = r.message
+            val acc = ArrayList<TopicCard>()
+            val seen = HashSet<String>()
+            var more = false
+            var last = -1
+            var fail: String? = null
+            for (p in 0..upTo) {
+                when (val r = fetch(p)) {
+                    is ApiResult.Ok -> {
+                        r.data.items.forEach { if (seen.add(it.id)) acc.add(it) }
+                        more = r.data.hasMore; last = p
+                        if (!more) break
+                    }
+                    is ApiResult.Fail -> { fail = r.message; break }
+                }
             }
+            if (last >= 0) { items = acc; hasMore = more; page = last; error = null; loaded = true }
+            else if (!loaded) error = fail
             refreshing = false
         }
     }
+
+    private companion object { const val SILENT_PAGES = 4 }
 
     fun loadMore() {
         if (!loaded || !hasMore || loadingMore || job?.isActive == true) return
@@ -161,7 +182,7 @@ fun LazyListScope.topicFeedItems(
                     modifier = Modifier.padding(horizontal = Dimens.gutter, vertical = Dimens.cardGap / 2),
                 )
             }
-            item(key = "more-${feed.items.size}") { LoadMoreFooter(feed.hasMore, feed.loadingMore) { feed.loadMore() } }
+            item(key = "more-${feed.items.size}-${feed.page}") { LoadMoreFooter(feed.hasMore, feed.loadingMore) { feed.loadMore() } }
         }
     }
 }
