@@ -2041,7 +2041,7 @@ def a_donationRemove(store, uid, args):
 
 
 CORE_FEATURES = {"home", "profile"}
-KNOWN_FEATURES = {"home", "qa", "groups", "messages", "guides", "directory", "donations", "childfile", "booking", "tools", "courses", "places", "profile"}
+KNOWN_FEATURES = {"home", "qa", "groups", "messages", "guides", "directory", "donations", "childfile", "booking", "tools", "courses", "places", "profile", "cards"}
 
 
 def disabled_features(store):

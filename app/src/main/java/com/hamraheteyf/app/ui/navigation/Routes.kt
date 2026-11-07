@@ -107,6 +107,7 @@ object Routes {
         return when {
             id.startsWith("learn:") -> learnItem(id.removePrefix("learn:"))
             id.startsWith("t_") -> topic(id)
+            id.startsWith("q_") || id.startsWith("gp_") -> topic("t_$id")   // pre-v2 question / group-post notifications (migrated as t_<old id>)
             id.startsWith("conv_") -> conversation(id)
             id.startsWith("g_") -> groupDetail(id)
             id.startsWith("don_") -> donationDetail(id)
