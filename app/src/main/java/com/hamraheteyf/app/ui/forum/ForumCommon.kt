@@ -199,7 +199,10 @@ fun LazyListState.atTop(): Boolean {
 fun ComposeFab(text: String, expanded: Boolean, onClick: () -> Unit, icon: ImageVector = Icons.Outlined.Edit) {
     ExtendedFloatingActionButton(
         onClick = onClick, expanded = expanded,
-        icon = { Icon(icon, contentDescription = text) },
+        // Screens without the tab bar don't consume the navigation bar: keep the button above it.
+        modifier = Modifier.navigationBarsPadding(),
+        // The label is read out while it shows; the icon speaks only when collapsed to it.
+        icon = { Icon(icon, contentDescription = if (expanded) null else text) },
         text = { Text(text) },
         containerColor = MaterialTheme.colorScheme.primary,
         contentColor = MaterialTheme.colorScheme.onPrimary,

@@ -1,6 +1,7 @@
 package com.hamraheteyf.app.ui.forum
 
 import android.content.Intent
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -11,6 +12,7 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -31,6 +33,13 @@ import kotlinx.coroutines.launch
 
 /** Replies per page — mirrors the server's PAGE_POSTS (only used to number replies). */
 private const val PAGE_POSTS = 30
+/** Server POST_BODY_MAX. */
+private const val REPLY_MAX = 10_000
+
+private val QuoteSaver = listSaver<QuoteRef?, String>(
+    save = { q -> if (q == null) emptyList() else listOf(q.id, q.authorName, q.excerpt) },
+    restore = { l -> if (l.size == 3) QuoteRef(l[0], l[1], l[2]) else null },
+)
 
 private enum class Scroll { NONE, TOP, END }
 
@@ -59,7 +68,8 @@ fun TopicScreen(
     var openingExpanded by rememberSaveable { mutableStateOf(false) }
 
     var text by rememberSaveable(topicId) { mutableStateOf("") }
-    var quote by remember { mutableStateOf<QuoteRef?>(null) }
+    // Saved with the draft text: a rotation must not turn «پاسخ به …» into a plain reply.
+    var quote by rememberSaveable(topicId, stateSaver = QuoteSaver) { mutableStateOf<QuoteRef?>(null) }
     var sending by remember { mutableStateOf(false) }
     var voting by remember { mutableStateOf(false) }
     val uploads = rememberImageUploads(client)
@@ -67,6 +77,11 @@ fun TopicScreen(
     var reportTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
     var editPost by remember { mutableStateOf<ForumPost?>(null) }
     var deleteId by remember { mutableStateOf<String?>(null) }
+    var confirmLeave by remember { mutableStateOf(false) }
+    // A half-written reply (or attached images) is not thrown away by an accidental back.
+    val hasDraft = text.isNotBlank() || uploads.items.isNotEmpty()
+    fun leave() { if (hasDraft && !sending) confirmLeave = true else onBack() }
+    BackHandler(enabled = hasDraft && !sending) { confirmLeave = true }
 
     fun toast(msg: String) { scope.launch { snack.showSnackbar(msg) } }
 
@@ -141,7 +156,7 @@ fun TopicScreen(
                             maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "بازگشت") } },
+                navigationIcon = { IconButton(onClick = ::leave) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "بازگشت") } },
                 actions = {
                     if (t != null) TopicMenu(
                         t, onFollow = { toggle("follow", { it.follow(t.id) }) { f -> data = data?.let { it.copy(topic = it.topic.copy(followed = f)) }; toast(if (f) "پاسخ‌های تازه را خبر می‌دهیم." else "دنبال کردن لغو شد.") } },
@@ -162,7 +177,7 @@ fun TopicScreen(
         },
         bottomBar = {
             if (d != null) ReplyComposer(
-                canReply = d.canReply, hint = d.replyHint, text = text, onText = { text = it }, quote = quote, onClearQuote = { quote = null },
+                canReply = d.canReply, hint = d.replyHint, text = text, onText = { text = it.take(REPLY_MAX) }, quote = quote, onClearQuote = { quote = null },
                 uploads = uploads, client = client, sending = sending,
                 onSend = {
                     val c = client ?: return@ReplyComposer
@@ -192,13 +207,13 @@ fun TopicScreen(
                 if (d.pages > 1) item(key = "pager-top") { PagerBar(d.page, d.pages, goPage) }
                 item(key = "opening") {
                     OpeningPostCard(
-                        t, client, collapsed = d.page > 0 && !openingExpanded, onToggle = { openingExpanded = true },
+                        t, client, collapsed = d.page > 0 && !openingExpanded, onToggle = { openingExpanded = true }, canQuote = d.canReply,
                         onOpenProfile = onOpenProfile,
                         onLike = { toggle("like:" + t.id, { it.like(t.id) }) { (liked, n) -> data = data?.let { it.copy(topic = it.topic.copy(liked = liked, likeCount = n)) } } },
                         onQuote = { quote = QuoteRef(t.id, t.author.name, t.body.take(160)) },
                         poll = {
                             t.poll?.let { poll ->
-                                PollCard(poll, voting) { opts ->
+                                PollCard(poll, voting, locked = t.locked || t.status != "PUBLISHED") { opts ->
                                     voting = true
                                     scope.launch {
                                         when (val r = client?.vote(t.id, opts)) {
@@ -230,7 +245,7 @@ fun TopicScreen(
                 items(d.posts.size, key = { "p-" + d.posts[it].id }) { i ->
                     val p = d.posts[i]
                     PostCard(
-                        p, d.page * PAGE_POSTS + i + 1, client, t.canAccept,
+                        p, d.page * PAGE_POSTS + i + 1, client, t.canAccept, canQuote = d.canReply,
                         onOpenProfile = onOpenProfile,
                         onLike = {
                             toggle("like:" + p.id, { it.like(p.id) }) { (liked, n) ->
@@ -266,6 +281,10 @@ fun TopicScreen(
             onDismiss = { deleteId = null },
         )
     }
+    if (confirmLeave) ConfirmDialog(
+        "پاسخ ارسال نشده", "اگر خارج شوید، پاسخی که نوشته‌اید از بین می‌رود.", "خروج",
+        onConfirm = onBack, onDismiss = { confirmLeave = false },
+    )
     editPost?.let { p -> EditPostDialog(p, saving = savingEdit, onDismiss = { editPost = null }) { body ->
         val c = client ?: return@EditPostDialog
         savingEdit = true

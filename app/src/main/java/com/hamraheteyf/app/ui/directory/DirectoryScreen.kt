@@ -1,4 +1,4 @@
-@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 
 package com.hamraheteyf.app.ui.directory
 
@@ -142,7 +142,7 @@ private class Chip(val key: String, val label: String, val on: Boolean, val icon
 private fun ExpertCard(item: ProfessionalDirectoryItem, rating: RatingSummary?, photoUrl: String?, onClick: () -> Unit) {
     AppCard(Modifier.padding(horizontal = Dimens.gutter, vertical = 4.dp), onClick = onClick) {
         Row(verticalAlignment = Alignment.Top) {
-            if (photoUrl != null) RemoteImage(photoUrl, Modifier.size(56.dp).clip(CircleShape))
+            if (photoUrl != null) RemoteImage(photoUrl, Modifier.size(56.dp).clip(CircleShape), displaySize = 56.dp)
             else UserAvatar(item.user.displayName, item.user.photoUrl, 56.dp)
             Spacer(Modifier.width(Dimens.m))
             Column(Modifier.weight(1f)) {
@@ -155,10 +155,11 @@ private fun ExpertCard(item: ProfessionalDirectoryItem, rating: RatingSummary?, 
                 }
                 if (item.profile.title.isNotBlank()) Text(item.profile.title, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(4.dp))
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Dimens.s)) {
-                    RatingInline(rating)
+                // wraps instead of squeezing the city when rating + city + «آنلاین» don't fit (large fonts)
+                FlowRow(verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterVertically), horizontalArrangement = Arrangement.spacedBy(Dimens.s)) {
+                    RatingInline(rating, Modifier.align(Alignment.CenterVertically))
                     item.profile.city?.takeIf { it.isNotBlank() }?.let { c ->
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(Modifier.align(Alignment.CenterVertically), verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Outlined.Place, null, tint = muted(), modifier = Modifier.size(14.dp))
                             Text(c, style = MaterialTheme.typography.labelMedium, color = muted(), maxLines = 1)
                         }

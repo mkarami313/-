@@ -37,7 +37,10 @@ fun ReplyComposer(
     Surface(tonalElevation = 2.dp, shadowElevation = 6.dp, color = MaterialTheme.colorScheme.surface) {
         Column(
             Modifier.fillMaxWidth()
-                .windowInsetsPadding(WindowInsets.ime.exclude(WindowInsets.navigationBars))
+                // The topic screen has no tab bar, so nothing above consumed the navigation bar: pad for it, and
+                // for the keyboard beyond it (ime minus navbars only lifted the bar to sit BEHIND the nav bar).
+                .navigationBarsPadding()
+                .imePadding()
                 .padding(horizontal = Dimens.gutter, vertical = Dimens.s),
         ) {
             if (!canReply) {

@@ -72,10 +72,12 @@ fun GroupScreen(
 
     val g = info
     val member = g?.myStatus == "ACTIVE"
+    val archived = g?.group?.status == "ARCHIVED"
     val canSee = g != null && (g.group.visibility != "PRIVATE" || member || g.canManage)
-    // approveMember / removeMember need an ACTIVE owner/moderator membership on the server; a site admin
-    // who only "canManage" (groupInfo) would just get «اجازهٔ مدیریت … را ندارید». Show those tools to real managers.
-    val memberManager = member && (g?.myRole == "OWNER" || g?.myRole == "MODERATOR")
+    // groupInfo.canManage = owner/moderator OR site admin, the same rule approveMember/removeMember enforce.
+    val memberManager = g?.canManage == true
+    // createTopic refuses an archived group, so don't offer to start a conversation there
+    val canPost = member && !archived
     val feed = rememberTopicFeed(client, groupId, canSee) { page ->
         if (!canSee) ApiResult.Ok(TopicList()) else client?.topics(groupId = groupId, page = page) ?: ApiResult.Fail("اتصال به سرور برقرار نیست.")
     }
@@ -109,7 +111,7 @@ fun GroupScreen(
             })
         },
         floatingActionButton = {
-            if (member && tab == GroupTab.TOPICS) ComposeFab("گفتگوی تازه", listState.atTop(), { onNewTopic(groupId) })
+            if (canPost && tab == GroupTab.TOPICS) ComposeFab("گفتگوی تازه", listState.atTop(), { onNewTopic(groupId) })
         },
         snackbarHost = { SnackbarHost(snack) },
         contentWindowInsets = WindowInsets(0),
@@ -158,8 +160,8 @@ fun GroupScreen(
                             item(key = "gap") { Spacer(Modifier.height(Dimens.xs)) }
                             topicFeedItems(
                                 feed, emptyMap(), onOpenTopic, Icons.Outlined.Forum, "هنوز گفتگویی در این گروه نیست",
-                                if (member) "اولین گفتگو را شما آغاز کنید." else "برای گفتگو عضوِ گروه شوید.",
-                                if (member) "گفتگوی تازه" else null, if (member) ({ onNewTopic(groupId) }) else null, showForum = false,
+                                when { archived -> "این گروه بسته شده است."; member -> "اولین گفتگو را شما آغاز کنید."; else -> "برای گفتگو عضوِ گروه شوید." },
+                                if (canPost) "گفتگوی تازه" else null, if (canPost) ({ onNewTopic(groupId) }) else null, showForum = false,
                             )
                         }
                         GroupTab.MEMBERS -> item(key = "members") {
@@ -209,7 +211,7 @@ private fun GroupMenu(g: GroupInfo, onEdit: () -> Unit, onArchive: () -> Unit, o
         IconButton(onClick = { open = true }) { Icon(Icons.Outlined.MoreVert, "گزینه‌ها") }
         DropdownMenu(open, { open = false }) {
             if (g.canManage) DropdownMenuItem({ Text("ویرایش") }, { open = false; onEdit() }, leadingIcon = { Icon(Icons.Outlined.Edit, null) })
-            if (g.isOwner) DropdownMenuItem({ Text("بستنِ گروه", color = MaterialTheme.colorScheme.error) }, { open = false; onArchive() },
+            if (g.isOwner && g.group.status != "ARCHIVED") DropdownMenuItem({ Text("بستنِ گروه", color = MaterialTheme.colorScheme.error) }, { open = false; onArchive() },
                 leadingIcon = { Icon(Icons.Outlined.Archive, null, tint = MaterialTheme.colorScheme.error) })
             if (!g.isOwner) DropdownMenuItem({ Text("گزارشِ گروه") }, { open = false; onReport() }, leadingIcon = { Icon(Icons.Outlined.Flag, null) })
         }

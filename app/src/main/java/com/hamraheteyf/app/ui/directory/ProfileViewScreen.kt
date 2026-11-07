@@ -183,7 +183,7 @@ fun ProfileViewScreen(userId: String, onBack: () -> Unit, onOpenConversation: (S
             AppCard {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     val photo = prof?.photoId?.let { id -> client?.fileUrl(id) }
-                    if (photo != null) RemoteImage(photo, Modifier.size(72.dp).clip(CircleShape)) else UserAvatar(view.name, view.photoUrl, 72.dp)
+                    if (photo != null) RemoteImage(photo, Modifier.size(72.dp).clip(CircleShape), displaySize = 72.dp) else UserAvatar(view.name, view.photoUrl, 72.dp)
                     Spacer(Modifier.width(Dimens.m))
                     Column(Modifier.weight(1f)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {

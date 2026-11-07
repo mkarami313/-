@@ -46,7 +46,7 @@ fun ImageGrid(ids: List<String>, client: CommunityClient?, modifier: Modifier = 
                     row.forEachIndexed { c, id ->
                         val index = r * perRow + c
                         RemoteImage(client.fileUrl(id), Modifier.weight(1f).aspectRatio(1f).clip(shape).clickable(onClickLabel = "بزرگ‌نمایی") { open = index },
-                            contentDescription = "تصویرِ ${(index + 1).toPersianDigits()} از ${ids.size.toPersianDigits()}")
+                            contentDescription = "تصویرِ ${(index + 1).toPersianDigits()} از ${ids.size.toPersianDigits()}", displaySize = 200.dp)
                     }
                     repeat(perRow - row.size) { Spacer(Modifier.weight(1f)) }
                 }
