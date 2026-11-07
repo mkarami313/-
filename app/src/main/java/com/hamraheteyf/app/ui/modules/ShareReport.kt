@@ -188,7 +188,16 @@ fun PdfExportBlock(childId: String, childName: String, shareId: String? = null) 
 // Owner side: share code + PDF
 // ---------------------------------------------------------------------------------------------
 
-private data class OwnShare(val id: String, val code: String, val expiresAt: Long, val revoked: Boolean, val redeemedByName: String)
+/**
+ * One of my shares as `shareList.owned` returns it. The server keeps only a hash of the code, so a
+ * code is visible once (right after creating it); the list shows status instead.
+ */
+private data class OwnShare(val id: String, val createdAt: Long, val expiresAt: Long, val status: String, val redeemedByName: String) {
+    val active get() = status == "WAITING" || status == "REDEEMED"
+}
+
+/** Every child-scoped record kind the server can share (server SHARE_KINDS); `shareCreate` rejects an empty list. */
+private val SHARE_KINDS = listOf("diary", "med", "log", "reward", "firstthen", "emergency")
 
 @Composable
 fun ShareAndReportSection(childId: String, childName: String) {
@@ -206,9 +215,9 @@ fun ShareAndReportSection(childId: String, childName: String) {
     LaunchedEffect(call, childId, tick) {
         val r = call?.call("shareList") ?: return@LaunchedEffect
         when (r) {
-            is ApiResult.Ok -> shares = (r.data["shares"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
+            is ApiResult.Ok -> shares = (r.data["owned"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
                 .filter { it.str("childId") == childId }
-                .map { OwnShare(it.str("id"), it.str("code"), it.lng("expiresAt"), it.bool("revoked"), it.str("redeemedByName")) }
+                .map { OwnShare(it.str("id"), it.lng("createdAt"), it.lng("expiresAt"), it.str("status"), it.str("redeemedByName")) }
             is ApiResult.Fail -> { if (shares == null) shares = emptyList(); error = r.message }
         }
     }
@@ -232,7 +241,10 @@ fun ShareAndReportSection(childId: String, childName: String) {
             onClick = {
                 busy = true; error = null
                 scope.launch {
-                    when (val r = call?.call("shareCreate", buildJsonObject { put("childId", childId); put("days", days) })) {
+                    when (val r = call?.call("shareCreate", buildJsonObject {
+                        put("childId", childId); put("days", days)
+                        put("kinds", buildJsonArray { SHARE_KINDS.forEach { add(it) } })
+                    })) {
                         is ApiResult.Ok -> { fresh = r.data.str("code"); tick++ }
                         is ApiResult.Fail -> error = r.message
                         null -> error = "اتصال به سرور برقرار نیست."
@@ -259,7 +271,7 @@ fun ShareAndReportSection(childId: String, childName: String) {
         }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp)) }
 
-        val active = shares.orEmpty().filter { !it.revoked && toMillis(it.expiresAt) > System.currentTimeMillis() }
+        val active = shares.orEmpty().filter { it.active && toMillis(it.expiresAt) > System.currentTimeMillis() }
         if (active.isNotEmpty()) {
             Spacer(Modifier.height(12.dp))
             Text("اشتراک‌های فعال", style = MaterialTheme.typography.titleSmall)
@@ -267,13 +279,15 @@ fun ShareAndReportSection(childId: String, childName: String) {
                 CompactCard {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
-                            Text(s.code, style = MaterialTheme.typography.titleMedium)
                             Text(
-                                "${daysLeft(s.expiresAt).toPersianDigits()} روز مانده" + if (s.redeemedByName.isNotBlank()) " · استفاده‌شده توسط ${s.redeemedByName}" else " · هنوز استفاده نشده",
+                                if (s.status == "REDEEMED" && s.redeemedByName.isNotBlank()) "در دسترسِ ${s.redeemedByName}" else "کدِ ساخته‌شده ${relativeTimeFa(toMillis(s.createdAt))}",
+                                style = MaterialTheme.typography.titleSmall,
+                            )
+                            Text(
+                                "${daysLeft(s.expiresAt).toPersianDigits()} روز مانده" + if (s.status == "REDEEMED") "" else " · هنوز استفاده نشده",
                                 style = MaterialTheme.typography.bodySmall, color = mutedColor(),
                             )
                         }
-                        IconButton(onClick = { copyText(ctx, "share", s.code) }) { Icon(Icons.Outlined.ContentCopy, "کپی کد") }
                         TextButton(onClick = { revoking = s }) { Text("قطع دسترسی") }
                     }
                 }
@@ -393,11 +407,15 @@ fun SharesReceivedScreen(onBack: () -> Unit, onOpen: (String) -> Unit) {
     }
 }
 
-private val SKIP_KEYS = setOf("id", "ownerId", "childId", "childName", "createdAt", "mine", "status", "ownerName")
+private val SKIP_KEYS = setOf("id", "ownerId", "childId", "childName", "createdAt", "mine", "status", "ownerName",
+    "photo", "firstImage", "thenImage")  // file ids: meaningless as text
 private val LABELS = mapOf(
     "date" to "تاریخ", "time" to "ساعت", "mood" to "حال‌وهوا", "note" to "یادداشت", "notes" to "توضیحات", "name" to "نام",
     "dose" to "دوز", "times" to "زمان‌ها", "title" to "عنوان", "text" to "متن", "type" to "نوع", "trigger" to "محرک",
     "behavior" to "رفتار", "severity" to "شدت", "duration" to "مدت", "intensity" to "شدت",
+    "durationMin" to "مدت (دقیقه)", "diagnosis" to "تشخیص", "sensory" to "حساسیت‌های حسی", "triggers" to "محرک‌ها",
+    "calming" to "آرام‌کننده‌ها", "medical" to "نکات پزشکی", "contact1Name" to "تماس ۱", "contact1Phone" to "تلفن ۱",
+    "contact2Name" to "تماس ۲", "contact2Phone" to "تلفن ۲", "goal" to "هدف", "stars" to "ستاره‌ها", "first" to "اول", "then" to "بعد",
 )
 
 @Composable
@@ -438,7 +456,9 @@ fun SharedChildViewerScreen(shareId: String, onBack: () -> Unit) {
     val child = data?.get("child") as? JsonObject
     val childId = listedChildId.ifBlank { child?.str("id").orEmpty() }.ifBlank { data?.str("childId").orEmpty() }
 
-    Scaffold(topBar = { ScreenHeader(child?.str("name")?.ifBlank { null } ?: "پروندهٔ اشتراکی", onBack = onBack) }) { pad ->
+    // shareView: {child: {id, nickname, ageRange}, ownerName, kinds, expiresAt, records: {kind: [rec…]}}
+    val childName = child?.str("nickname")?.ifBlank { null } ?: child?.str("name").orEmpty()
+    Scaffold(topBar = { ScreenHeader(childName.ifBlank { null } ?: "پروندهٔ اشتراکی", onBack = onBack) }) { pad ->
         Column(Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
             when {
                 error != null -> ErrorState(error!!, onRetry = { tick++ })
@@ -449,22 +469,29 @@ fun SharedChildViewerScreen(shareId: String, onBack: () -> Unit) {
                     Spacer(Modifier.height(8.dp))
                     child?.let { c ->
                         CompactCard {
-                            Text(c.str("name"), style = MaterialTheme.typography.titleMedium)
-                            c.str("ageRange").takeIf { it.isNotBlank() }?.let { Text("بازهٔ سنی: $it", style = MaterialTheme.typography.bodyMedium) }
-                            (c["interests"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }?.takeIf { it.isNotEmpty() }
-                                ?.let { Text("علاقه‌ها: ${it.joinToString("، ")}", style = MaterialTheme.typography.bodyMedium) }
+                            Text(childName.ifBlank { "کودک" }, style = MaterialTheme.typography.titleMedium)
+                            d.str("ownerName").takeIf { it.isNotBlank() }?.let { Text("از طرف $it", style = MaterialTheme.typography.bodySmall, color = mutedColor()) }
+                            c.str("ageRange").takeIf { it.isNotBlank() }?.let { a ->
+                                val label = runCatching { com.hamraheteyf.app.data.model.AgeRange.valueOf(a).label }.getOrDefault(a)
+                                Text("بازهٔ سنی: $label", style = MaterialTheme.typography.bodyMedium)
+                            }
                         }
                     }
-                    (d["emergency"] as? JsonObject)?.let { e ->
-                        JsonSection("کارت اضطراری", listOf(e))
-                    }
-                    fun rows(k: String) = (d[k] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
-                    JsonSection("ثبت‌های رفتاری", rows("logs"))
+                    val records = d["records"] as? JsonObject
+                    fun rows(k: String) = (records?.get(k) as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
+                    JsonSection("کارت اضطراری", rows("emergency").take(1))
+                    JsonSection("ثبت‌های رفتاری", rows("log"))
                     JsonSection("یادداشت‌های روزانه", rows("diary"))
                     JsonSection("داروها", rows("med"))
+                    JsonSection("جدول‌های تشویقی", rows("reward"))
+                    JsonSection("اول/بعد", rows("firstthen"))
+                    if (records != null && SHARE_KINDS.all { rows(it).isEmpty() }) {
+                        Spacer(Modifier.height(12.dp))
+                        Text("هنوز موردی در این پرونده ثبت نشده است.", style = MaterialTheme.typography.bodyMedium, color = mutedColor())
+                    }
                     if (childId.isNotBlank()) {
                         Spacer(Modifier.height(20.dp))
-                        PdfExportBlock(childId, child?.str("name").orEmpty(), shareId)
+                        PdfExportBlock(childId, childName, shareId)
                     }
                 }
             }

@@ -324,7 +324,16 @@ object Reminders {
             vibrateDone(context)
         }
         PushNotifier.ensureChannel(context)
-        val tap = PendingIntent.getActivity(context, 0, Intent(context, MainActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val key = o.getString("key")
+        val open = Intent(context, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        // A booked-slot alert opens the booking screen (like the server's BOOKING notifications).
+        if (key.startsWith("appt:slot_")) {
+            open.putExtra(com.hamraheteyf.app.push.PendingDeepLink.EXTRA_TYPE, "BOOKING")
+                .putExtra(com.hamraheteyf.app.push.PendingDeepLink.EXTRA_RELATED, key.removePrefix("appt:").substringBefore(':'))
+        }
+        // Per-reminder request code so one alert's extras never overwrite another's.
+        val tap = PendingIntent.getActivity(context, key.hashCode(), open, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val n = NotificationCompat.Builder(context, PushNotifier.CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_notify).setContentTitle(o.getString("title")).setContentText(o.getString("body"))
             .setAutoCancel(true).setPriority(NotificationCompat.PRIORITY_HIGH).setContentIntent(tap).build()

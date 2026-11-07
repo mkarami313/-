@@ -117,11 +117,14 @@ class ServerStore(val api: HamrahApi, private val context: android.content.Conte
         // Seed the mirror with at least the signed-in user so the UI has something immediately.
         mirror.update { it.copy(users = (it.users.filterNot { u -> u.id == resp.user.id }) + resp.user) }
         mirror.currentUserId.value = resp.user.id
-        refresh(force = true)
+        // Session plumbing first, the (suspending) first refresh last: setting currentUserId swaps the UI to the
+        // signed-in graph at once, and if the caller's coroutine dies with the login screen, nothing below
+        // the suspension point would run.
         startPolling()
         Reminders.scheduleAll(appContext)
         scope.launch { Reminders.refreshFromServer(appContext, api) }
         com.hamraheteyf.app.push.PushRegistration.register(api)  // register device for push
+        refresh(force = true)
     }
 
     private suspend fun syncFeatures() {
@@ -189,7 +192,7 @@ class ServerStore(val api: HamrahApi, private val context: android.content.Conte
             val obj = api.json.parseToJsonElement(f.readText()).jsonObject
             if (obj["uid"]?.jsonPrimitive?.contentOrNull != uid) { f.delete(); return }
             val st = obj["state"] ?: return
-            mirror.state.value = api.json.decodeFromJsonElement(Db.serializer(), st)
+            mirror.state.value = api.decodeDb(st)
             // Keep the etag so the first poll can be a cheap "unchanged" check.
             etag = obj["etag"]?.jsonPrimitive?.contentOrNull
         }.onFailure { runCatching { cacheFile.delete() } }

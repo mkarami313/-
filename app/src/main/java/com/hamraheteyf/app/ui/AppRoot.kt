@@ -111,7 +111,14 @@ private fun MainNavHost() {
                                 selected = selected,
                                 onClick = {
                                     nav.navigate(f.entryRoute) {
-                                        popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+                                        // HOME is the root of the tab stack. After onboarding the graph's start
+                                        // destination (ONBOARDING) is no longer on the back stack, so popping up to
+                                        // it was a no-op and every tab tap piled another screen onto the stack.
+                                        if (runCatching { nav.getBackStackEntry(Routes.HOME) }.isSuccess) {
+                                            popUpTo(Routes.HOME) { saveState = true }
+                                        } else {
+                                            popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+                                        }
                                         launchSingleTop = true
                                         restoreState = true
                                     }

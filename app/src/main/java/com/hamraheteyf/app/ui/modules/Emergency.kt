@@ -95,8 +95,11 @@ object EmergencyCache {
 }
 
 private fun dial(ctx: Context, phone: String) {
-    runCatching { ctx.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + phone.filter { it.isDigit() || it == '+' })).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+    runCatching { ctx.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse(telUri(phone))).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
 }
+
+/** `tel:` URI with ASCII digits: numbers are often typed with a Persian keyboard (۰۹۱۲…), which dialers don't call. */
+internal fun telUri(phone: String) = "tel:" + ReminderTimes.digits(phone).filter { it in '0'..'9' || it == '+' }
 
 private val Yellow = Color(0xFFFFE600)
 

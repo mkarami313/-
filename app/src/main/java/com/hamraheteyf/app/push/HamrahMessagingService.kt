@@ -12,6 +12,10 @@ class HamrahMessagingService : FirebaseMessagingService() {
 
     override fun onMessageReceived(message: RemoteMessage) {
         val data = message.data
+        // Signed out (and the token's unregister didn't reach the server, e.g. offline): don't show
+        // the previous account's notifications on this device.
+        val api = (applicationContext as? com.hamraheteyf.app.HamrahApplication)?.container?.serverApi
+        if (api != null && api.token == null) return
         val notifId = data["notifId"] ?: message.messageId ?: return
         val title = data["title"] ?: message.notification?.title ?: "همراهِ طیف"
         val body = data["body"] ?: message.notification?.body ?: ""

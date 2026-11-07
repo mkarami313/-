@@ -68,10 +68,12 @@ object AppUpdater {
             val total = c.contentLengthLong
             val md = MessageDigest.getInstance("SHA-256")
             c.inputStream.use { inp -> out.outputStream().use { os ->
-                val buf = ByteArray(64 * 1024); var done = 0L; var n: Int
+                val buf = ByteArray(64 * 1024); var done = 0L; var n: Int; var lastPct = -1
                 while (inp.read(buf).also { n = it } > 0) {
                     os.write(buf, 0, n); md.update(buf, 0, n); done += n
-                    if (total > 0) onProgress((done * 100 / total).toInt())
+                    // Report whole-percent steps only (not every 64 KB) so the dialog doesn't recompose hundreds of times.
+                    val pct = if (total > 0) (done * 100 / total).toInt().coerceIn(0, 100) else -1
+                    if (pct >= 0 && pct != lastPct) { lastPct = pct; onProgress(pct) }
                 }
             } }
             val hex = md.digest().joinToString("") { "%02x".format(it) }
@@ -98,9 +100,12 @@ object AppUpdater {
 
     fun canInstall(ctx: Context) = Build.VERSION.SDK_INT < 26 || ctx.packageManager.canRequestPackageInstalls()
 
-    fun openInstallPermission(ctx: Context) {
+    /** Opens the «install unknown apps» switch for this app; some OEM builds lack the per-app screen. */
+    fun openInstallPermission(ctx: Context): Boolean = runCatching {
         ctx.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${ctx.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-    }
+    }.recoverCatching {
+        ctx.startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }.isSuccess
 
     fun install(ctx: Context, apk: File) {
         val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", apk)

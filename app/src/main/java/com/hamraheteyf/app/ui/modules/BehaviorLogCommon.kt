@@ -166,5 +166,6 @@ fun Rec.dayIso(): String {
     val d = this["date"]
     if (com.hamraheteyf.app.ui.common.Jalali.parseIso(d) != null) return d.take(10)
     val c = java.util.Calendar.getInstance().apply { timeInMillis = createdAt }
-    return "%04d-%02d-%02d".format(c.get(java.util.Calendar.YEAR), c.get(java.util.Calendar.MONTH) + 1, c.get(java.util.Calendar.DAY_OF_MONTH))
+    // Locale.US: on a Persian-locale phone the default locale formats %d with Persian digits, which no ISO parser reads.
+    return String.format(java.util.Locale.US, "%04d-%02d-%02d", c.get(java.util.Calendar.YEAR), c.get(java.util.Calendar.MONTH) + 1, c.get(java.util.Calendar.DAY_OF_MONTH))
 }

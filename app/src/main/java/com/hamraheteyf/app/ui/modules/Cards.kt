@@ -95,10 +95,13 @@ object PicCards {
     fun bitmap(ctx: Context, card: PicCard, sample: Int = 1): Bitmap? {
         val key = card.path + "@" + sample
         bitmaps.get(key)?.let { return it }
-        return runCatching {
-            ctx.assets.open(card.path).use { BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample }) }
-        }.getOrNull()?.also { bitmaps.put(key, it) }
+        return decode(ctx, card, sample)?.also { bitmaps.put(key, it) }
     }
+
+    /** Uncached decode (PDF export: hundreds of full-size pictures must not flush the screen's cache). */
+    fun decode(ctx: Context, card: PicCard, sample: Int = 1): Bitmap? = runCatching {
+        ctx.assets.open(card.path).use { BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample }) }
+    }.getOrNull()
 }
 
 @Composable
@@ -285,7 +288,9 @@ fun CardsGameScreen(onBack: () -> Unit) {
                         picked = c.category + c.id
                         if (c == answer) {
                             score++; speak("آفرین! ${answer.word}")
-                            scope.launch { delay(1600); picked = null; round++ }
+                            val r0 = round
+                            // Skip if «سؤالِ بعدی» / a category change already moved on (no double jump).
+                            scope.launch { delay(1600); if (round == r0) { picked = null; round++ } }
                         } else {
                             speak(answer.word)
                             scope.launch { delay(900); if (picked == c.category + c.id) picked = null }
@@ -364,36 +369,49 @@ private fun buildCardsPdf(ctx: Context, cats: List<PicCategory>, perPage: Int, w
     val text = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { typeface = font; textAlign = Paint.Align.CENTER; color = android.graphics.Color.rgb(30, 30, 30) }
     val img = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     val cards = cats.flatMap { c -> c.cards.map { it to c.color } }
-    cards.chunked(perPage).forEachIndexed { pi, chunk ->
-        val page = doc.startPage(PdfDocument.PageInfo.Builder(pw, ph, pi + 1).create())
-        val cv = page.canvas
-        chunk.forEachIndexed { i, (card, color) ->
-            val x = margin + (i % cols) * cw; val y = margin + (i / cols) * ch
-            cv.drawRect(x, y, x + cw, y + ch, cut)
-            val pad = 10f
-            val labelH = if (withWords) ch * 0.18f else 0f
-            val side = minOf(cw - 2 * pad, ch - 2 * pad - labelH)
-            val left = x + (cw - side) / 2; val top = y + pad
-            frame.color = android.graphics.Color.parseColor(color)
-            val r = RectF(left, top, left + side, top + side)
-            PicCards.bitmap(ctx, card, 1)?.let { cv.drawBitmap(it, null, r, img) }
-            cv.drawRoundRect(r, 14f, 14f, frame)
-            if (withWords) {
-                text.textSize = labelH * 0.55f
-                cv.drawText(card.word, x + cw / 2, top + side + labelH * 0.72f, text)
-            }
-        }
-        doc.finishPage(page)
-    }
+    // 12 cards on a page are ~3 cm wide: a 2× sub-sampled picture is still ~300 dpi and needs a quarter of the memory.
+    val sample = if (perPage >= 12) 2 else 1
     val dir = File(ctx.cacheDir, "shared").apply { mkdirs() }
     val f = File(dir, "hamrah-cards.pdf")
-    f.outputStream().use { doc.writeTo(it) }
-    doc.close()
+    val tmp = File(dir, "hamrah-cards.pdf.part")
+    try {
+        cards.chunked(perPage).forEachIndexed { pi, chunk ->
+            val page = doc.startPage(PdfDocument.PageInfo.Builder(pw, ph, pi + 1).create())
+            val cv = page.canvas
+            chunk.forEachIndexed { i, (card, color) ->
+                val x = margin + (i % cols) * cw; val y = margin + (i / cols) * ch
+                cv.drawRect(x, y, x + cw, y + ch, cut)
+                val pad = 10f
+                val labelH = if (withWords) ch * 0.18f else 0f
+                val side = minOf(cw - 2 * pad, ch - 2 * pad - labelH)
+                val left = x + (cw - side) / 2; val top = y + pad
+                frame.color = runCatching { android.graphics.Color.parseColor(color) }.getOrDefault(android.graphics.Color.GRAY)
+                val r = RectF(left, top, left + side, top + side)
+                // Uncached: a big selection used to push every full-size picture through the screen's LRU cache.
+                // (No recycle(): the PDF backend may still reference the pixels; unreferenced bitmaps are reclaimed by GC.)
+                PicCards.decode(ctx, card, sample)?.let { cv.drawBitmap(it, null, r, img) }
+                cv.drawRoundRect(r, 14f, 14f, frame)
+                if (withWords) {
+                    text.textSize = labelH * 0.55f
+                    cv.drawText(card.word, x + cw / 2, top + side + labelH * 0.72f, text)
+                }
+            }
+            doc.finishPage(page)
+        }
+        tmp.outputStream().use { doc.writeTo(it) }
+    } finally {
+        doc.close()
+    }
+    if (!tmp.renameTo(f)) { f.delete(); if (!tmp.renameTo(f)) error("rename failed") }
     return f
 }
 
 private fun sharePdf(ctx: Context, f: File) {
-    val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", f)
-    val send = Intent(Intent.ACTION_SEND).setType("application/pdf").putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    ctx.startActivity(Intent.createChooser(send, "چاپ یا ارسالِ کارت‌ها").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    runCatching {
+        val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", f)
+        val send = Intent(Intent.ACTION_SEND).setType("application/pdf").putExtra(Intent.EXTRA_STREAM, uri)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            .apply { clipData = android.content.ClipData.newRawUri("", uri) }
+        ctx.startActivity(Intent.createChooser(send, "چاپ یا ارسالِ کارت‌ها").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }.onFailure { Toast.makeText(ctx, "برنامه‌ای برای باز کردنِ PDF پیدا نشد.", Toast.LENGTH_LONG).show() }
 }

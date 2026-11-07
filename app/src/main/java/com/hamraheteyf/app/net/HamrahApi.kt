@@ -2,7 +2,7 @@ package com.hamraheteyf.app.net
 
 import android.content.Context
 import com.hamraheteyf.app.BuildConfig
-import com.hamraheteyf.app.data.model.User
+import com.hamraheteyf.app.data.model.*
 import com.hamraheteyf.app.data.repository.fake.Db
 import com.hamraheteyf.app.security.TokenCrypto
 import kotlinx.coroutines.Dispatchers
@@ -302,8 +302,41 @@ class HamrahApi(context: Context) {
     }
 
     private fun decodeState(el: JsonElement, etag: String?): ApiResult<StateFetch> =
-        runCatching { StateFetch.Fresh(json.decodeFromJsonElement(Db.serializer(), el), etag, el.toString()) }
+        runCatching { StateFetch.Fresh(decodeDb(el), etag, el.toString()) }
             .fold({ ApiResult.Ok(it) }, { ApiResult.Fail("پاسخ سرور نامعتبر است.") })
+
+    /**
+     * Decodes a snapshot. One record the app can't read (an enum value from a newer server, a missing
+     * field) used to fail the WHOLE snapshot, leaving the user with no data at all; now only that record
+     * is dropped.
+     */
+    fun decodeDb(el: JsonElement): Db = runCatching { json.decodeFromJsonElement(Db.serializer(), el) }
+        .getOrElse { decodeDbLenient(el) }
+
+    private fun <T> decodeEach(o: JsonObject, key: String, s: kotlinx.serialization.KSerializer<T>): List<T> =
+        (o[key] as? kotlinx.serialization.json.JsonArray)
+            ?.mapNotNull { e -> runCatching { json.decodeFromJsonElement(s, e) }.getOrNull() }.orEmpty()
+
+    private fun decodeDbLenient(el: JsonElement): Db {
+        val o = el.jsonObject
+        return Db(
+            users = decodeEach(o,"users", User.serializer()),
+            professionals = decodeEach(o,"professionals", ProfessionalProfile.serializer()),
+            verifications = decodeEach(o,"verifications", VerificationRequest.serializer()),
+            children = decodeEach(o,"children", ChildProfilePrivate.serializer()),
+            questions = decodeEach(o,"questions", Question.serializer()),
+            answers = decodeEach(o,"answers", Answer.serializer()),
+            groups = decodeEach(o,"groups", Group.serializer()),
+            memberships = decodeEach(o,"memberships", GroupMembership.serializer()),
+            posts = decodeEach(o,"posts", GroupPost.serializer()),
+            conversations = decodeEach(o,"conversations", Conversation.serializer()),
+            messages = decodeEach(o,"messages", Message.serializer()),
+            guides = decodeEach(o,"guides", GuideArticle.serializer()),
+            reports = decodeEach(o,"reports", Report.serializer()),
+            notifications = decodeEach(o,"notifications", Notification.serializer()),
+            adminActions = decodeEach(o,"adminActions", AdminAction.serializer()),
+        )
+    }
 
     /** Only the session that actually sent the rejected token is torn down (not a newer login). */
     private fun unauthorized(sent: String?): ApiResult.Fail {
@@ -331,7 +364,7 @@ class HamrahApi(context: Context) {
                 if (raw.code == 401) return@fold unauthorized(sent)
                 if (!ok) return@fold ApiResult.Fail(errorOf(obj))
                 val stateEl = obj?.get("state")
-                val state = stateEl?.let { runCatching { json.decodeFromJsonElement(Db.serializer(), it) }.getOrNull() }
+                val state = stateEl?.let { runCatching { decodeDb(it) }.getOrNull() }
                 ApiResult.Ok(ActionResult(obj?.get("data"), state, StateReplyParser.etagOf(stateEl), if (state != null) stateEl.toString() else null))
             },
             onFailure = { ApiResult.Fail("خطای ارتباط با سرور.", network = true) },

@@ -37,7 +37,10 @@ object PushRegistration {
     fun onNewToken(context: Context, token: String) {
         scope.launch {
             runCatching {
-                val api = HamrahApi(context)
+                // The app's own client: a fresh HamrahApi would re-attach FileUrls to an instance with
+                // no 401 handler and an empty signed-URL cache.
+                val api = (context.applicationContext as? com.hamraheteyf.app.HamrahApplication)?.container?.serverApi
+                    ?: return@runCatching
                 if (api.token != null) {
                     api.action("registerPush", argsJson("token" to token, "platform" to "android"))
                 }

@@ -137,7 +137,7 @@ fun ScheduleScreen(onBack: () -> Unit) {
 private fun StepAlarmDialog(r: Rec, onClose: () -> Unit) {
     val ctx = LocalContext.current.applicationContext
     val steps = r.lines("steps")
-    val times = remember(r.id) { mutableStateMapOf<Int, String>().also { m -> Reminders.stepAlarms(ctx, r.id).forEach { (i, hm) -> m[i] = "%02d:%02d".format(hm.first, hm.second) } } }
+    val times = remember(r.id) { mutableStateMapOf<Int, String>().also { m -> Reminders.stepAlarms(ctx, r.id).forEach { (i, hm) -> m[i] = String.format(java.util.Locale.US, "%02d:%02d", hm.first, hm.second) } } }
     AlertDialog(
         onDismissRequest = onClose,
         title = { Text("یادآور مراحل «${r["title"]}»") },

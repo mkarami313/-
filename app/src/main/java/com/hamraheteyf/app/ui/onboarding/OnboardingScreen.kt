@@ -57,6 +57,8 @@ fun OnboardingScreen(onFinished: () -> Unit) {
     val message by vm.message.collectAsState()
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(message) { message?.let { snackbar.showSnackbar(it); vm.clearMessage() } }
+    // System back steps back through the wizard instead of closing the app mid-way (onboarding is the root).
+    androidx.activity.compose.BackHandler(enabled = step > 0) { step-- }
 
     fun finish(save: Boolean) {
         val id = uid

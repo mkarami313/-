@@ -134,7 +134,8 @@ private fun ConversationContent(conversationId: String, onBack: () -> Unit, onSw
                         } else {
                             Composer(
                                 text = text, onText = { text = it }, sending = sending,
-                                onSend = { vm.send(text) { text = "" } },
+                                // Clear only what was sent: text typed while the send was in flight is kept.
+                                onSend = { val sent = text; vm.send(sent) { if (text == sent) text = "" } },
                             )
                         }
                         ConversationStatus.ENDED -> Column(Modifier.padding(Dimens.gutter), horizontalAlignment = Alignment.CenterHorizontally) {
