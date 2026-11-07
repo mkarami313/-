@@ -71,6 +71,7 @@ fun ForumHubScreen(
                 feedName = it.name
                 scope.launch { listState.scrollToItem(0) }
             }, Modifier.padding(vertical = Dimens.xs))
+            FeedNotice(feed)
             PullToRefreshBox(
                 isRefreshing = if (feedKind == HubFeed.FORUMS) treeRefreshing else feed.refreshing,
                 onRefresh = {
@@ -155,6 +156,7 @@ fun ForumTopicsScreen(
         floatingActionButton = { ComposeFab(label, listState.atTop(), onClick = { onNewTopic(forumId) }) },
         contentWindowInsets = WindowInsets(0),
     ) { padding ->
+        FeedNotice(feed)
         PullToRefreshBox(feed.refreshing, { feed.refresh(pull = true) }, Modifier.padding(padding).fillMaxSize()) {
             LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = FabClearance)) {
                 val kids = forum?.children.orEmpty()
@@ -201,6 +203,7 @@ fun ClinicScreen(onBack: () -> Unit, onOpenTopic: (String) -> Unit, onAsk: (Stri
         },
         contentWindowInsets = WindowInsets(0),
     ) { padding ->
+        FeedNotice(feed)
         PullToRefreshBox(feed.refreshing, { feed.refresh(pull = true) }, Modifier.padding(padding).fillMaxSize()) {
             LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = FabClearance)) {
                 item(key = "intro") {

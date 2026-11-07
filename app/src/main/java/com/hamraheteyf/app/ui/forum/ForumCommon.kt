@@ -37,6 +37,9 @@ class TopicFeed(private val scope: CoroutineScope, private val fetch: suspend (I
     var loadingMore by mutableStateOf(false); private set
     var refreshing by mutableStateOf(false); private set
     var error by mutableStateOf<String?>(null); private set
+    /** One-shot message for a failed pull-to-refresh while a list is already shown (see [FeedNotice]). */
+    var notice by mutableStateOf<String?>(null); private set
+    fun clearNotice() { notice = null }
     /** Index of the last page loaded; part of the footer key so a page of duplicates still advances. */
     var page by mutableStateOf(0); private set
     private var job: Job? = null
@@ -72,6 +75,7 @@ class TopicFeed(private val scope: CoroutineScope, private val fetch: suspend (I
             }
             if (last >= 0) { items = acc; hasMore = more; page = last; error = null; loaded = true }
             else if (!loaded) error = fail
+            else if (pull) notice = fail ?: "به‌روزرسانی انجام نشد. اتصال اینترنت را بررسی کنید."
             refreshing = false
         }
     }
@@ -216,3 +220,13 @@ fun String.asciiDigits(): String = map { c ->
 
 /** Bottom spacer so the last row clears the FAB. */
 val FabClearance = 88.dp
+
+
+/** Shows a short toast when a pull-to-refresh fails on a list that is already on screen. */
+@Composable
+fun FeedNotice(feed: TopicFeed) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(feed.notice) {
+        feed.notice?.let { android.widget.Toast.makeText(ctx, it, android.widget.Toast.LENGTH_SHORT).show(); feed.clearNotice() }
+    }
+}

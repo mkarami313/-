@@ -116,10 +116,11 @@ fun GroupScreen(
         snackbarHost = { SnackbarHost(snack) },
         contentWindowInsets = WindowInsets(0),
     ) { padding ->
+        FeedNotice(feed)
         when {
             g == null && error != null -> ErrorView(error.orEmpty(), { error = null; loadInfo() }, Modifier.padding(padding))
             g == null -> LoadingView(Modifier.padding(padding))
-            else -> PullToRefreshBox(refreshing, { refreshing = true; loadInfo(); if (canSee) feed.refresh() }, Modifier.padding(padding).fillMaxSize()) {
+            else -> PullToRefreshBox(refreshing, { refreshing = true; loadInfo(); if (canSee) feed.refresh(pull = true) }, Modifier.padding(padding).fillMaxSize()) {
                 LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = FabClearance)) {
                     item(key = "header") {
                         GroupHeader(

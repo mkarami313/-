@@ -3158,8 +3158,10 @@ def sweep_orphans(min_age_hours=24, owner=None, dry=False):
     referenced = set()
     for (txt,) in cur.fetchall():
         referenced.update(re.findall(r"[0-9a-f]{32}", txt))
-    for sql in ("SELECT images::text FROM f_topics", "SELECT images::text FROM f_posts",
-                "SELECT coalesce(cover_id,'') || ' ' || coalesce(video_id,'') FROM l_items"):
+    # removed (deleted) topics/posts/learning items no longer hold their files; hidden ones still do
+    for sql in ("SELECT images::text FROM f_topics WHERE status<>'REMOVED'",
+                "SELECT images::text FROM f_posts WHERE status<>'REMOVED'",
+                "SELECT coalesce(cover_id,'') || ' ' || coalesce(video_id,'') FROM l_items WHERE status<>'REMOVED'"):
         cur.execute(sql)
         for (txt,) in cur.fetchall():
             referenced.update(re.findall(r"[0-9a-f]{32}", txt or ""))
@@ -4988,8 +4990,25 @@ def save_video_stream(store, uid, rfile, n, name):
         raise ApiError("حجمِ ویدیو باید کمتر از ۲۵۰ مگابایت باشد.")
     with MUT_LOCK:
         mine = [f for f in store.all("files") if f.get("ownerId") == uid and str(f.get("mime", "")).startswith("video/")]
-        if sum(int(f.get("size", 0) or 0) for f in mine) + n > MAX_VIDEO_BYTES_PER_USER and not is_admin(store, uid):
+        used = sum(int(f.get("size", 0) or 0) for f in mine) + _VIDEO_INFLIGHT.get(uid, 0)
+        if used + n > MAX_VIDEO_BYTES_PER_USER and not is_admin(store, uid):
             raise ApiError("سقفِ فضای ویدیوهای شما پر شده است.")
+        _VIDEO_INFLIGHT[uid] = _VIDEO_INFLIGHT.get(uid, 0) + n   # reserve, so parallel uploads can't overshoot the quota
+    try:
+        return _save_video_stream(store, uid, rfile, n, name)
+    finally:
+        with MUT_LOCK:
+            left = _VIDEO_INFLIGHT.get(uid, 0) - n
+            if left > 0:
+                _VIDEO_INFLIGHT[uid] = left
+            else:
+                _VIDEO_INFLIGHT.pop(uid, None)
+
+
+_VIDEO_INFLIGHT = {}
+
+
+def _save_video_stream(store, uid, rfile, n, name):
     fid = secrets.token_hex(16)
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     path = os.path.join(UPLOAD_DIR, "%s.mp4" % fid)
