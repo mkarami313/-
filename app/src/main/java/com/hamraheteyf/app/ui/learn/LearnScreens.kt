@@ -38,6 +38,7 @@ import com.hamraheteyf.app.ui.common.toPersianDigits
 import com.hamraheteyf.app.ui.kit.*
 import com.hamraheteyf.app.ui.theme.Dimens
 import com.hamraheteyf.app.ui.theme.Gold
+import com.hamraheteyf.app.ui.theme.GoldInk
 import com.hamraheteyf.app.ui.theme.hexColor
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -213,7 +214,7 @@ private fun FeaturedPager(client: CommunityClient?, items: List<LearnItem>, cats
                         .padding(start = Dimens.m, end = Dimens.m, top = 28.dp, bottom = Dimens.m)) {
                         Column {
                             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                if (it.featured) Pill("ویژه", Color.White, Gold.copy(alpha = 0.85f), Icons.Outlined.Star)
+                                if (it.featured) Pill("ویژه", Color.White, GoldInk, Icons.Outlined.Star)
                                 cats[it.categoryId]?.let { c -> Pill(c.title, Color.White, Color.White.copy(alpha = 0.22f)) }
                             }
                             Spacer(Modifier.height(4.dp))

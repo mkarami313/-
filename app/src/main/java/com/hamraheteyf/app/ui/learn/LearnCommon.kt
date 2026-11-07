@@ -42,6 +42,7 @@ import com.hamraheteyf.app.ui.kit.muted
 import com.hamraheteyf.app.ui.theme.Danger
 import com.hamraheteyf.app.ui.theme.Dimens
 import com.hamraheteyf.app.ui.theme.Gold
+import com.hamraheteyf.app.ui.theme.GoldInk
 import com.hamraheteyf.app.ui.theme.VerifiedGreen
 import com.hamraheteyf.app.ui.theme.hexColor
 import java.util.Calendar
@@ -92,7 +93,7 @@ internal fun LearnItem.kindLabel() = if (isVideo) "ویدیو" else "مقاله"
 @Composable
 internal fun StatusPill(status: String) {
     when (status) {
-        "PENDING" -> Pill("در انتظارِ بررسی", Gold, icon = Icons.Outlined.HourglassEmpty)
+        "PENDING" -> Pill("در انتظارِ بررسی", GoldInk, container = Gold.copy(alpha = 0.16f), icon = Icons.Outlined.HourglassEmpty)
         "PUBLISHED" -> Pill("منتشر شد", VerifiedGreen, icon = Icons.Outlined.CheckCircle)
         "REJECTED" -> Pill("رد شد", Danger, icon = Icons.Outlined.HighlightOff)
         "HIDDEN" -> Pill("پنهان", muted(), icon = Icons.Outlined.VisibilityOff)

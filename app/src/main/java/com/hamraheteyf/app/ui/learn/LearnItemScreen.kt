@@ -53,6 +53,7 @@ import com.hamraheteyf.app.ui.kit.*
 import com.hamraheteyf.app.ui.theme.Danger
 import com.hamraheteyf.app.ui.theme.Dimens
 import com.hamraheteyf.app.ui.theme.Gold
+import com.hamraheteyf.app.ui.theme.GoldInk
 import com.hamraheteyf.app.ui.theme.hexColor
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -181,7 +182,7 @@ fun LearnItemScreen(id: String, onBack: () -> Unit, onEdit: (String) -> Unit, on
                     Spacer(Modifier.height(Dimens.m))
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                         if (it.status != "PUBLISHED") StatusPill(it.status)
-                        if (it.featured) Pill("ویژه", Gold, icon = Icons.Outlined.Star)
+                        if (it.featured) Pill("ویژه", GoldInk, container = Gold.copy(alpha = 0.16f), icon = Icons.Outlined.Star)
                         cat?.let { c -> Pill(c.title, hexColor(c.color), icon = iconFor(c.icon)) }
                         Pill(it.kindLabel(), muted(), MaterialTheme.colorScheme.surfaceVariant)
                     }
