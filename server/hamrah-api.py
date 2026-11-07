@@ -140,6 +140,37 @@ def conn():
     return c
 
 
+class transaction:
+    """All writes inside run as ONE Postgres transaction on this thread's connection: committed when the
+    block ends normally, rolled back on any exception (an ApiError raised half-way included), so an action
+    never leaves half its writes behind. Re-entrant: an inner block just joins the outer one."""
+
+    def __enter__(self):
+        self.c = conn()
+        self.outer = self.c.autocommit
+        if self.outer:
+            self.c.autocommit = False
+        return self
+
+    def __exit__(self, et, ev, tb):
+        if not self.outer:
+            return False
+        try:
+            if et is None:
+                self.c.commit()
+            else:
+                self.c.rollback()
+        finally:
+            try:
+                self.c.autocommit = True
+            except Exception:  # a broken connection: drop it, the next conn() reconnects
+                try:
+                    self.c.close()
+                except Exception:
+                    pass
+        return False
+
+
 class Store:
     """A thin per-request view over the docs table. Loads collections lazily and caches
     them so a single action reads each collection once; writes go straight to Postgres."""
@@ -156,6 +187,22 @@ class Store:
             self._cache[coll] = [row[0] for row in cur.fetchall()]
             cur.close()
         return self._cache[coll]
+
+    def where(self, coll, field, values):
+        """Docs whose top-level `field` is one of `values`. Served from the cache when the collection is
+        already loaded, else by an indexed query (docs_*_idx below) instead of reading the whole
+        collection — the snapshot hot path for messages and notifications."""
+        values = [v for v in values if isinstance(v, str)]
+        if not values:
+            return []
+        if coll in self._cache:
+            vs = set(values)
+            return [d for d in self._cache[coll] if d.get(field) in vs]
+        cur = conn().cursor()
+        cur.execute("SELECT data FROM docs WHERE collection=%s AND data->>%s = ANY(%s)", (coll, field, values))
+        rows = [row[0] for row in cur.fetchall()]
+        cur.close()
+        return rows
 
     def get(self, coll, _id):
         if not isinstance(_id, str):
@@ -352,8 +399,12 @@ def token_user(token):
 # --------------------------------------------------------------------------------------
 
 class RateLimiter:
+    MAX_KEYS = 20000
+
     def __init__(self):
         self._h = {}
+        self._win = {}  # key -> its own window, so a sweep never trims a key with somebody else's window
+        self._sweep_at = self.MAX_KEYS
         self._lock = threading.Lock()
 
     def _prune(self, key, window, now):
@@ -362,7 +413,17 @@ class RateLimiter:
             self._h[key] = q
         else:
             self._h.pop(key, None)
+            self._win.pop(key, None)
         return q
+
+    def _record(self, key, q, window, now):
+        q.append(now)
+        self._h[key] = q
+        self._win[key] = max(window, self._win.get(key, 0))
+        if len(self._h) > self._sweep_at:  # bound memory under key-spraying: drop only expired entries
+            for k in list(self._h):
+                self._prune(k, self._win.get(k, 0), now)
+            self._sweep_at = max(self.MAX_KEYS, 2 * len(self._h))  # amortised: no full sweep per call
 
     def blocked(self, key, limit, window):
         with self._lock:
@@ -371,12 +432,7 @@ class RateLimiter:
     def hit(self, key, window):
         with self._lock:
             now = time.time()
-            q = self._prune(key, window, now)
-            q.append(now)
-            self._h[key] = q
-            if len(self._h) > 20000:  # bound memory under key-spraying
-                for k in list(self._h)[:5000]:
-                    self._prune(k, window, now)
+            self._record(key, self._prune(key, window, now), window, now)
 
     def allow(self, key, limit, window):
         """Count one event; False when the limit for the window is already used up."""
@@ -385,13 +441,13 @@ class RateLimiter:
             q = self._prune(key, window, now)
             if len(q) >= limit:
                 return False
-            q.append(now)
-            self._h[key] = q
+            self._record(key, q, window, now)
             return True
 
     def clear(self, key):
         with self._lock:
             self._h.pop(key, None)
+            self._win.pop(key, None)
 
 
 RL = RateLimiter()
@@ -533,6 +589,28 @@ def push_to_user(store, user_id, nid, ntype, title, body, related_id):
     _fcm_fanout([(t, nid) for t in tokens], title, body, ntype, related_id)
 
 
+NOTIF_KEEP = 200            # newest notifications per user that ride in the snapshot
+NOTIF_MAX_PER_USER = 300    # the sweeper trims beyond this, and read ones older than NOTIF_READ_TTL_MS
+NOTIF_READ_TTL_MS = 60 * 86400 * 1000
+
+
+def prune_notifications():
+    """Notifications only ever grew; every snapshot and poll paid for that. -> rows removed."""
+    n = _x("DELETE FROM docs WHERE collection='notifications' AND data->>'read'='true' "
+           "AND coalesce((data->>'createdAt')::bigint, 0) < %s", (now_ms() - NOTIF_READ_TTL_MS,))
+    n += _x("DELETE FROM docs d USING (SELECT id, row_number() OVER (PARTITION BY data->>'userId' "
+            "ORDER BY coalesce((data->>'createdAt')::bigint, 0) DESC) AS rn FROM docs WHERE collection='notifications') x "
+            "WHERE d.collection='notifications' AND d.id=x.id AND x.rn > %s", (NOTIF_MAX_PER_USER,))
+    return n
+
+
+def notify_throttled(store, user_id, ntype, title, body, related_id, window):
+    """add_notification, but at most one per (recipient, thread) per `window` seconds, so a busy
+    conversation or topic can't bury someone in notifications and pushes."""
+    if RL.allow("nfy:%s:%s:%s" % (user_id, ntype, related_id), 1, window):
+        add_notification(store, user_id, ntype, title, body, related_id=related_id)
+
+
 def add_notification(store, user_id, ntype, title, body, related_id=None, force=False):
     recipient = store.get("users", user_id)
     if not recipient:
@@ -575,6 +653,29 @@ def _s(v):
     if isinstance(v, (int, float)) and not isinstance(v, bool):
         return str(v)
     return ""
+
+
+# Persian text normalisation for search: Arabic yeh/kaf (keyboards differ), teh-marbuta/heh-hamza, hamza'd
+# alefs and Persian/Arabic digits map to one form; ZWNJ, tatweel, harakat and direction marks vanish
+# («می‌خواهم» finds «میخواهم»). FA_SQL applies the very same mapping inside Postgres.
+_FA_MAP_FROM = "يىكةۀأإ" + "۰۱۲۳۴۵۶۷۸۹" + "٠١٢٣٤٥٦٧٨٩"
+_FA_MAP_TO = "ییکههاا" + "0123456789" + "0123456789"
+_FA_DROP = "‌‍‎‏ـ" + "".join(chr(c) for c in range(0x064B, 0x0653)) + "ٰ"
+_FA_TABLE = str.maketrans(_FA_MAP_FROM, _FA_MAP_TO, _FA_DROP)
+
+
+def fa_norm(v):
+    return _s(v).translate(_FA_TABLE).lower()
+
+
+def FA_SQL(col):
+    """SQL expression: `col` normalised like fa_norm (constant strings, nothing user-supplied)."""
+    return "translate(coalesce(%s,''), '%s', '%s')" % (col, _FA_MAP_FROM + _FA_DROP, _FA_MAP_TO)
+
+
+def like_pat(q):
+    """ILIKE pattern for a normalised search term; the user's % and _ are literal."""
+    return "%" + re.sub(r"([%_\\])", r"\\\1", fa_norm(q)) + "%"
 
 
 def _sid(v, limit=100):
@@ -974,7 +1075,7 @@ def a_exportMyData(store, uid, args):
     ]
     return {"json": json.dumps(export, ensure_ascii=False, indent=2),
             "text": "\n".join(lines),
-            "filename": "hamrah-export-%s.json" % time.strftime("%Y-%m-%d")}
+            "filename": "hamrah-export-%s.json" % tehran_day()}
 
 
 def _unlink_file(doc):
@@ -1067,10 +1168,6 @@ def wipe_account(store, uid):
                              "متخصص حساب خود را حذف کرد و نوبت «%s» لغو شد." % d.get("when", ""), d["id"])
     _hand_over_groups(store, uid)
     my_groups = {m["groupId"] for m in store.all("memberships") if m.get("userId") == uid}
-    if u.get("email"):
-        remove_cred(u["email"])
-        store.delete("resets", _reset_key(u["email"]))
-    store.delete("users", uid)
     store.delete_where("professionals", lambda p: p.get("userId") == uid)
     store.delete_where("verifications", lambda v: v.get("userId") == uid)
     store.delete_where("children", lambda c: c.get("familyUserId") == uid)
@@ -1149,6 +1246,12 @@ def wipe_account(store, uid):
     _x("UPDATE l_items SET author_id=%s, cover_id=NULL WHERE author_id=%s", (DELETED_USER_ID, uid))
     _x("UPDATE l_items SET status='REMOVED' WHERE author_id=%s AND kind='video' AND video_id IS NOT NULL "
        "AND video_id NOT IN (SELECT id FROM docs WHERE collection='files')", (DELETED_USER_ID,))
+    # The account itself goes LAST: if anything above fails, the user can still sign in and retry the
+    # deletion instead of being locked out of an account whose personal data is half left behind.
+    if u.get("email"):
+        remove_cred(u["email"])
+        store.delete("resets", _reset_key(u["email"]))
+    store.delete("users", uid)
 
 
 # ---- Questions & answers ----
@@ -1177,8 +1280,10 @@ def a_editQuestion(store, uid, args):
         raise ApiError("پرسش یافت نشد.")
     if q.get("authorId") != uid:
         raise ApiError("فقط نویسنده می‌تواند پرسش را ویرایش کند.")
-    q["title"] = _s(args.get("title"))
-    q["body"] = _s(args.get("body"))
+    title, body = _s(args.get("title")), _s(args.get("body"))
+    if not 3 <= len(title) <= 140 or not 5 <= len(body) <= 20000:
+        raise ApiError("عنوان (۳ تا ۱۴۰) یا متن پرسش (۵ تا ۲۰ هزار نویسه) معتبر نیست.")
+    q["title"], q["body"] = title, body
     q["updatedAt"] = now_ms()
     store.put("questions", q)
 
@@ -1211,10 +1316,14 @@ def a_createAnswer(store, uid, args):
     q = store.get("questions", args.get("questionId"))
     if not q:
         raise ApiError("پرسش یافت نشد.")
+    if q.get("status") != "PUBLISHED" and q.get("authorId") != uid:
+        raise ApiError("پرسش یافت نشد.")
     if q.get("commentsClosed"):
         raise ApiError("امکان پاسخ به این پرسش بسته شده است.")
-    if len(_s(args.get("body"))) < 2:
-        raise ApiError("متن پاسخ را بنویسید.")
+    if not 2 <= len(_s(args.get("body"))) <= POST_BODY_MAX:
+        raise ApiError("متن پاسخ را بنویسید (حداکثر ۱۰ هزار نویسه).")
+    if q.get("authorId") != uid and _blocked_between(store, uid, q.get("authorId")):
+        raise ApiError("امکانِ پاسخ به این پرسش وجود ندارد.")
     store.put("answers", {
         "id": new_id("a"), "questionId": q["id"], "authorId": uid, "body": _s(args.get("body")),
         "status": "PUBLISHED", "helpfulByUserIds": [], "createdAt": now_ms(), "updatedAt": now_ms(),
@@ -1230,7 +1339,7 @@ def a_createAnswer(store, uid, args):
 def a_toggleHelpful(store, uid, args):
     _require(uid)
     ans = store.get("answers", args.get("answerId"))
-    if not ans:
+    if not ans or ans.get("status") != "PUBLISHED":
         raise ApiError("پاسخ یافت نشد.")
     helpful = set(ans.get("helpfulByUserIds") or [])
     if uid in helpful:
@@ -1291,6 +1400,8 @@ def a_joinOrRequest(store, uid, args):
     if g.get("status") == "ARCHIVED":
         raise ApiError("این گروه بسته شده است.")
     new_status = "ACTIVE" if g.get("visibility") == "PUBLIC" else "REQUESTED"
+    if new_status == "REQUESTED" and _blocked_between(store, uid, g.get("ownerId")):
+        raise ApiError("امکانِ درخواستِ عضویت در این گروه وجود ندارد.")
     store.delete_where("memberships", lambda m: m.get("groupId") == gid and m.get("userId") == uid)
     store.put("memberships", {
         "id": new_id("m"), "groupId": gid, "userId": uid, "role": "MEMBER", "status": new_status,
@@ -1300,7 +1411,7 @@ def a_joinOrRequest(store, uid, args):
         g["memberCount"] = int(g.get("memberCount", 0)) + 1
         g["updatedAt"] = now_ms()
         store.put("groups", g)
-    else:
+    elif RL.allow("joinnote:%s:%s" % (uid, gid), 1, 86400):  # request→cancel→request can't ping the owner each time
         add_notification(store, g["ownerId"], "GROUP_JOIN_REQUEST", "درخواست عضویت",
                          "یک درخواست عضویت تازه در گروه شما ثبت شد.", related_id=gid)
 
@@ -1388,8 +1499,8 @@ def a_createPost(store, uid, args):
     gid = args.get("groupId")
     if not is_active_member(store, gid, uid):
         raise ApiError("برای ارسال پست باید عضو فعال گروه باشید.")
-    if len(_s(args.get("body"))) < 2:
-        raise ApiError("متن پست را بنویسید.")
+    if not 2 <= len(_s(args.get("body"))) <= POST_BODY_MAX:
+        raise ApiError("متن پست را بنویسید (حداکثر ۱۰ هزار نویسه).")
     reply_to = args.get("replyToPostId")
     parent = store.get("posts", reply_to) if isinstance(reply_to, str) and reply_to else None
     if parent and parent.get("groupId") != gid:
@@ -1441,16 +1552,18 @@ def a_requestConversation(store, uid, args):
     existing = next((c for c in store.all("conversations")
                      if set(c.get("participantIds") or []) == {uid, recipient_id}
                      and c.get("status") != "DECLINED"), None)
-    if existing and existing.get("status") == "ENDED":
+    if existing and existing.get("status") != "ENDED":
+        return {"id": existing["id"]}
+    # Every (re)request notifies the recipient: end → request again, or a request after a decline, must not
+    # turn into a way to ping someone endlessly. A few per pair per day, plus the overall cap.
+    if not RL.allow("convpair:%s:%s" % (uid, recipient_id), 5, 86400) or not RL.allow("convreq:" + uid, 20, 3600):
+        raise ApiError(TOO_MANY)
+    if existing:
         existing.update({"status": "REQUESTED", "initiatorId": uid, "endedByUserId": None, "updatedAt": now_ms()})
         store.put("conversations", existing)
         add_notification(store, recipient_id, "NEW_MESSAGE", "درخواست گفتگو",
                          "یک درخواست گفتگوی تازه دارید.", related_id=existing["id"])
         return {"id": existing["id"]}
-    if existing:
-        return {"id": existing["id"]}
-    if not RL.allow("convreq:" + uid, 20, 3600):
-        raise ApiError(TOO_MANY)
     cid = new_id("conv")
     store.put("conversations", {
         "id": cid, "participantIds": [uid, recipient_id], "initiatorId": uid,
@@ -1538,9 +1651,8 @@ def a_sendMessage(store, uid, args):
     reads[uid] = now_ms()
     conv["readAt"] = reads
     store.put("conversations", conv)
-    if other not in (conv.get("mutedByUserIds") or []):
-        add_notification(store, other, "NEW_MESSAGE", "پیام جدید", "پیام جدید دارید.",
-                         related_id=conv["id"])
+    if other not in (conv.get("mutedByUserIds") or []):  # a burst of messages -> one notification
+        notify_throttled(store, other, "NEW_MESSAGE", "پیام جدید", "پیام جدید دارید.", conv["id"], 60)
 
 
 # ---- Guides ----
@@ -1639,7 +1751,8 @@ def a_resolveReport(store, uid, args):
 
 def a_markRead(store, uid, args):
     _require(uid)
-    n = store.get("notifications", args.get("notificationId"))
+    nid = _sid(args.get("notificationId"))
+    n = next(iter(store.where("notifications", "id", [nid] if nid else [])), None)  # one row, not the collection
     if n and n.get("userId") == uid:
         n["read"] = True
         store.put("notifications", n)
@@ -1647,8 +1760,8 @@ def a_markRead(store, uid, args):
 
 def a_markAllRead(store, uid, args):
     _require(uid)
-    for n in store.all("notifications"):
-        if n.get("userId") == uid and not n.get("read"):
+    for n in store.where("notifications", "userId", [uid]):
+        if not n.get("read"):
             n["read"] = True
             store.put("notifications", n)
 
@@ -1913,15 +2026,18 @@ def _donation(store, did, uid=None):
         raise ApiError("این آگهی در دسترس نیست.")
     if d.get("status") == "HIDDEN" and not (uid and (d.get("ownerId") == uid or is_admin(store, uid))):
         raise ApiError("این آگهی در دسترس نیست.")
+    if uid and d.get("ownerId") != uid and not is_admin(store, uid) and d.get("ownerId") in _blocked_ids(store, uid):
+        raise ApiError("این آگهی در دسترس نیست.")  # a block hides each side's listings from the other
     return d
 
 
 def a_donationList(store, uid, args):
     _require(uid)
     cat, city, mine = _s(args.get("category")), _s(args.get("city")), bool(args.get("mine"))
+    hidden = set() if is_admin(store, uid) else _blocked_ids(store, uid)
     items = []
     for d in store.all("donations"):
-        if d.get("status") == "REMOVED":
+        if d.get("status") == "REMOVED" or d.get("ownerId") in hidden:
             continue
         if d.get("status") == "HIDDEN" and d.get("ownerId") != uid and not is_admin(store, uid):
             continue
@@ -2422,7 +2538,8 @@ def a_slotCancel(store, uid, args):
 
 def a_search(store, uid, args):
     _require(uid)
-    q = _s(args.get("q")).lower()
+    raw_q = _s(args.get("q"))[:80]
+    q = fa_norm(raw_q)
     if len(q) < 2:
         raise ApiError("حداقل دو نویسه وارد کنید.")
     off = blocked_modules(store, uid)
@@ -2430,21 +2547,21 @@ def a_search(store, uid, args):
     out = []
 
     def hit(*parts):
-        return any(q in _s(x).lower() for x in parts)
+        return any(q in fa_norm(x) for x in parts)
 
     def add(t, d, title, sub=""):
         if len(out) < 60:
             out.append({"type": t, "id": d["id"], "title": title, "sub": sub})
 
     if "qa" not in off:
-        for t in a_forumTopics(store, uid, {"q": q, "sort": "active", "size": 20})["items"]:
+        for t in a_forumTopics(store, uid, {"q": raw_q, "sort": "active", "size": 20})["items"]:
             add("topic", t, t["title"], "گفتگو در انجمن")
     if "groups" not in off:
         for d in store.all("groups"):
             if d.get("status") != "ARCHIVED" and hit(d.get("title"), d.get("description"), d.get("city")):
                 add("group", d, d.get("title", ""), "گروه")
     if "guides" not in off:
-        for it in a_learnList(store, uid, {"q": q, "size": 15})["items"]:
+        for it in a_learnList(store, uid, {"q": raw_q, "size": 15})["items"]:
             add("learn", it, it["title"], "ویدیوی آموزشی" if it["kind"] == "video" else "مقالهٔ آموزشی")
     if "directory" not in off:
         admin = is_admin(store, uid)
@@ -2458,7 +2575,7 @@ def a_search(store, uid, args):
                 add("user", d, d.get("displayName", ""), "متخصص" + (" · " + city if city else ""))
     if "donations" not in off:
         for d in store.all("donations"):
-            if d.get("status") in ("AVAILABLE", "RESERVED") and hit(d.get("title"), d.get("description"), d.get("city")):
+            if d.get("status") in ("AVAILABLE", "RESERVED") and d.get("ownerId") not in hidden and hit(d.get("title"), d.get("description"), d.get("city")):
                 add("donation", d, d.get("title", ""), "دست‌به‌دست")
     for kind, label, fields in (("course", "دوره آموزشی", ("title", "description")),
                                 ("place", "مرکز", ("name", "city", "type")),
@@ -2730,7 +2847,7 @@ def a_adminStats(store, uid, args):
 
 def a_adminListUsers(store, uid, args):
     _need_admin(store, uid)
-    q = _s(args.get("q")).lower()[:80]
+    q = fa_norm(args.get("q"))[:80]
     status, atype = _s(args.get("status")), _s(args.get("accountType"))
     try:
         offset = max(0, int(args.get("offset") or 0))
@@ -2743,7 +2860,7 @@ def a_adminListUsers(store, uid, args):
             continue
         if atype and u.get("accountType") != atype:
             continue
-        if q and q not in (u.get("displayName") or "").lower() and q not in (u.get("email") or "").lower():
+        if q and q not in fa_norm(u.get("displayName")) and q not in fa_norm(u.get("email")):
             continue
         rows.append(u)
     rows.sort(key=lambda u: u.get("joinedAt", 0), reverse=True)
@@ -2883,11 +3000,23 @@ def a_shareRedeem(store, uid, args):
             "ownerName": owner.get("displayName", ""), "kinds": sh["kinds"], "expiresAt": sh["expiresAt"]}
 
 
+TEHRAN_OFFSET_S = 3 * 3600 + 30 * 60  # Iran Standard Time, no DST since 2022
+
+
+def tehran_day(ms=None):
+    """YYYY-MM-DD of an epoch-ms instant (default now) on the Tehran calendar — not the server's zone."""
+    sec = (ms / 1000.0) if ms is not None else time.time()
+    return time.strftime("%Y-%m-%d", time.gmtime(sec + TEHRAN_OFFSET_S))
+
+
 def _iso_day(d):
     v = str(d.get("date") or "")
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", v):
         return v
-    return time.strftime("%Y-%m-%d", time.gmtime(d.get("createdAt", 0) / 1000))
+    try:
+        return tehran_day(float(d.get("createdAt") or 0))
+    except (TypeError, ValueError):
+        return tehran_day(0)
 
 
 def _child_records(store, owner, cid, kinds, dfrom="", dto=""):
@@ -3001,7 +3130,7 @@ def build_report_html(store, uid, q):
         "<p class=foot>این گزارش از ثبت‌های خانواده در «همراهِ طیف» ساخته شده و جایگزین نظر پزشک یا متخصص نیست.</p>"
         "</body></html>"
     ) % (esc(child.get("nickname") or "کودک"), esc(child.get("nickname") or "کودک"), esc(period),
-         esc(owner_doc.get("displayName", "")), time.strftime("%Y-%m-%d"), "".join(parts))
+         esc(owner_doc.get("displayName", "")), tehran_day(), "".join(parts))
 
 
 # ---- State etag (cheap polling) --------------------------------------------------------------
@@ -3068,6 +3197,10 @@ def _sweeper_loop():
             log("sweeper: removed %d orphan upload(s)" % n)
         except Exception:
             log("sweeper failed:", traceback.format_exc(limit=3))
+        try:
+            log("sweeper: pruned %d old notification(s)" % prune_notifications())
+        except Exception:
+            log("notification prune failed:", traceback.format_exc(limit=3))
         time.sleep(24 * 3600)
 
 
@@ -3322,6 +3455,7 @@ MAX_IMAGES = 6
 PAGE_TOPICS = 25
 PAGE_POSTS = 30
 TOPIC_EDIT_WINDOW_MS = 7 * 24 * 3600 * 1000   # editing is open for a week, deleting always
+DOUBLE_SUBMIT_MS = 2 * 60 * 1000               # an identical topic/reply within this window is a resend
 
 
 def _q(sql, params=(), one=False, many=True):
@@ -3624,9 +3758,8 @@ def a_forumTopics(store, uid, args):
         params.append(author)
     q = _s(args.get("q"))[:80]
     if q:
-        where.append("(t.title ILIKE %s OR t.body ILIKE %s)")
-        pat = "%" + re.sub(r"([%_\\])", r"\\\1", q) + "%"   # the user's % and _ are literal
-        params += [pat, pat]
+        where.append("(%s ILIKE %%s OR %s ILIKE %%s)" % (FA_SQL("t.title"), FA_SQL("t.body")))
+        params += [like_pat(q)] * 2
     hidden = list(_hidden_authors(store, uid, admin))
     if hidden:
         where.append("NOT (t.author_id = ANY(%s))")
@@ -3815,6 +3948,11 @@ def a_forumCreateTopic(store, uid, args):
         forum = _forum(fid)
         if not forum:
             raise ApiError("یک تالار برای این گفتگو انتخاب کنید.")
+    dup = _q("SELECT id FROM f_topics WHERE author_id=%s AND title=%s AND body=%s AND created_at > %s "
+             "AND status<>'REMOVED' AND forum_id IS NOT DISTINCT FROM %s AND group_id IS NOT DISTINCT FROM %s LIMIT 1",
+             (uid, title, body, now_ms() - DOUBLE_SUBMIT_MS, fid, gid), one=True)
+    if dup:  # a double tap / retry after a lost response: hand back the topic that already exists
+        return {"id": dup["id"]}
     _topic_rate(uid)
     images = _check_images(store, uid, args.get("images"))
     poll = _clean_poll(args.get("poll")) if args.get("poll") else None
@@ -3830,7 +3968,8 @@ def a_forumCreateTopic(store, uid, args):
         g = store.get("groups", gid)
         for m in list(store.all("memberships")):
             if m.get("groupId") == gid and m.get("status") == "ACTIVE" and m.get("userId") != uid \
-                    and m.get("notify", True) and not _blocked_between(store, uid, m.get("userId")):
+                    and m.get("notify", True) and not _blocked_between(store, uid, m.get("userId")) \
+                    and RL.allow("gnew:%s:%s" % (m["userId"], gid), 1, 300):  # one per member per group per 5 min
                 add_notification(store, m["userId"], "GROUP_REPLY", "گفتگوی تازه در «%s»" % (g.get("title") or "گروه"),
                                  title[:80], related_id=tid)
     return {"id": tid}
@@ -3848,6 +3987,11 @@ def a_forumReply(store, uid, args):
     body = _s(args.get("body"))
     if not (POST_BODY_MIN <= len(body) <= POST_BODY_MAX):
         raise ApiError("متنِ پاسخ را بنویسید (حداکثر ۱۰ هزار نویسه).")
+    dup = _q("SELECT id FROM f_posts WHERE topic_id=%s AND author_id=%s AND body=%s AND created_at > %s "
+             "AND status<>'REMOVED' LIMIT 1", (t["id"], uid, body, now_ms() - DOUBLE_SUBMIT_MS), one=True)
+    if dup:  # same reply twice in a row (double tap, retry): stored once, no second round of notifications
+        _, _, total = _visible_post_count(t, uid, admin, list(_hidden_authors(store, uid, admin)) or ["-"])
+        return {"id": dup["id"], "pages": max(1, (total + PAGE_POSTS - 1) // PAGE_POSTS)}
     if not RL.allow("reply:" + uid, 40, 600):
         raise ApiError(TOO_MANY)
     images = _check_images(store, uid, args.get("images"))
@@ -3877,8 +4021,11 @@ def a_forumReply(store, uid, args):
         notified.add(qrow["author_id"])
     if t["author_id"] not in notified and t["author_id"] != DELETED_USER_ID:
         ntitle = "پاسخِ متخصص" if expert else "پاسخِ تازه"
-        add_notification(store, t["author_id"], "QUESTION_ANSWERED", ntitle,
-                         "%s در «%s» پاسخ داد." % (me, t["title"][:60]), related_id=t["id"])
+        nbody = "%s در «%s» پاسخ داد." % (me, t["title"][:60])
+        if expert:  # an expert's answer always reaches the asker
+            add_notification(store, t["author_id"], "QUESTION_ANSWERED", ntitle, nbody, related_id=t["id"])
+        else:
+            notify_throttled(store, t["author_id"], "QUESTION_ANSWERED", ntitle, nbody, t["id"], 300)
         notified.add(t["author_id"])
     for f in _q("SELECT user_id FROM f_follows WHERE topic_id=%s", (t["id"],)):
         fu = f["user_id"]
@@ -3886,8 +4033,8 @@ def a_forumReply(store, uid, args):
             continue
         if t.get("group_id") and not is_active_member(store, t["group_id"], fu):
             continue  # left the group: no more news from inside it
-        add_notification(store, fu, "GROUP_REPLY", "پاسخِ تازه در گفتگویی که دنبال می‌کنید",
-                         "«%s»" % t["title"][:80], related_id=t["id"])
+        notify_throttled(store, fu, "GROUP_REPLY", "پاسخِ تازه در گفتگویی که دنبال می‌کنید",
+                         "«%s»" % t["title"][:80], t["id"], 900)
         notified.add(fu)
     _, _, total = _visible_post_count(t, uid, admin, list(_hidden_authors(store, uid, admin)) or ["-"])
     return {"id": pid, "pages": max(1, (total + PAGE_POSTS - 1) // PAGE_POSTS)}
@@ -4119,8 +4266,8 @@ def a_learnList(store, uid, args):
         params.append(uid)
     q = _s(args.get("q"))[:80]
     if q:
-        where.append("(title ILIKE %s OR summary ILIKE %s OR body ILIKE %s)")
-        params += ["%" + re.sub(r"([%_\\])", r"\\\1", q) + "%"] * 3
+        where.append("(%s ILIKE %%s OR %s ILIKE %%s OR %s ILIKE %%s)" % (FA_SQL("title"), FA_SQL("summary"), FA_SQL("body")))
+        params += [like_pat(q)] * 3
     page = _int(args.get("page"), 0, 0, 400)
     size = _int(args.get("size"), 20, 5, 50)
     order = "created_at" if args.get("review") or args.get("mine") else "featured DESC, published_at"
@@ -4362,7 +4509,7 @@ def a_groupDirectory(store, uid, args):
     Filters: q, city, category; my=true for my groups. Returns my membership status per group."""
     admin = is_admin(store, uid)
     mine = {m["groupId"]: m for m in store.all("memberships") if m.get("userId") == uid}
-    q, city, cat = _s(args.get("q")), _s(args.get("city")), _s(args.get("category"))
+    q, city, cat = fa_norm(args.get("q")), _s(args.get("city")), _s(args.get("category"))
     out = []
     for g in store.all("groups"):
         if g.get("status") == "ARCHIVED" and not admin:
@@ -4371,7 +4518,7 @@ def a_groupDirectory(store, uid, args):
         st = (m or {}).get("status")
         if args.get("my") and st != "ACTIVE":
             continue
-        if q and q not in (g.get("title") or "") and q not in (g.get("description") or ""):
+        if q and q not in fa_norm(g.get("title")) and q not in fa_norm(g.get("description")):
             continue
         if city and city != (g.get("city") or ""):
             continue
@@ -4433,10 +4580,13 @@ def a_groupUpdate(store, uid, args):
         raise ApiError("فقط سازندهٔ گروه نوعِ گروه (عمومی/خصوصی) را تغییر می‌دهد.")
     if "coverId" in args:  # validated before anything changes; a moderator may keep the owner's cover
         cov = _s(args.get("coverId"))
+        m = re.search(r"([0-9a-f]{32})", cov)
         if not cov:
             g["coverId"] = None
-        elif cov != g.get("coverId"):
-            g["coverId"] = (_check_images(store, uid, [cov]) or [None])[0]
+        elif not m:
+            raise ApiError("شناسهٔ فایل نامعتبر است.")
+        elif m.group(1) != g.get("coverId"):
+            g["coverId"] = (_check_images(store, uid, [m.group(1)]) or [None])[0]
     g["title"] = title[:80]
     if "description" in args:
         g["description"] = _s(args.get("description"))[:1000]
@@ -4624,9 +4774,22 @@ def build_state(store, uid):
               or (g.get("visibility") == "PUBLIC" and g.get("status") != "ARCHIVED")]
     visible_group_ids = {g["id"] for g in groups}
 
-    # Memberships: of groups I can see (so member lists / my requests resolve).
-    memberships = [m for m in store.all("memberships")
-                   if m.get("groupId") in visible_group_ids and m.get("status") != "REMOVED"]
+    # Memberships: my own rows; the active members of groups whose member list I may see (public, or a
+    # private one I'm an active member of — a pending request is not enough); pending requests only for
+    # the group's managers. Mirrors groupInfo, so the snapshot can't list a private group to an outsider.
+    roles = _active_roles(store)
+    groups_by_id = {g["id"]: g for g in groups}
+
+    def membership_visible(m):
+        gid = m.get("groupId")
+        if gid not in visible_group_ids or m.get("status") == "REMOVED":
+            return False
+        if admin or m.get("userId") == uid:
+            return True
+        if m.get("status") == "ACTIVE":
+            return groups_by_id[gid].get("visibility") == "PUBLIC" or (gid, uid) in roles
+        return m.get("status") == "REQUESTED" and roles.get((gid, uid)) in ("OWNER", "MODERATOR")
+    memberships = [m for m in store.all("memberships") if membership_visible(m)]
 
     # Posts: of visible groups where I'm allowed (public group, or active member).
     def post_visible(p):
@@ -4643,12 +4806,12 @@ def build_state(store, uid):
                      if uid in (c.get("participantIds") or []) and c.get("status") != "DECLINED"]
     conv_ids = {c["id"] for c in conversations}
     by_conv = {}
-    for m in store.all("messages"):
-        if m.get("conversationId") in conv_ids:
-            by_conv.setdefault(m["conversationId"], []).append(m)
+    for m in store.where("messages", "conversationId", sorted(conv_ids)):
+        by_conv.setdefault(m["conversationId"], []).append(m)
     messages = [m for ms in by_conv.values() for m in sorted(ms, key=lambda x: x.get("createdAt", 0))[-200:]]
 
-    notifications = [n for n in store.all("notifications") if n.get("userId") == uid]
+    notifications = sorted(store.where("notifications", "userId", [uid]),
+                           key=lambda n: n.get("createdAt", 0), reverse=True)[:NOTIF_KEEP]
 
     # Verifications: own + all if admin. Children: own only.
     if admin:  # the review queue holds only each user's latest request
@@ -5013,8 +5176,14 @@ class Handler(BaseHTTPRequestHandler):
             touch_user(uid)
         return uid
 
+    def _clen(self):
+        try:
+            return int(self.headers.get("Content-Length", "0") or "0")
+        except ValueError:
+            raise ApiError("درخواست نامعتبر است.")
+
     def _body(self):
-        n = int(self.headers.get("Content-Length", "0") or "0")
+        n = self._clen()
         if n <= 0:
             return {}
         if n > MAX_BODY:
@@ -5107,11 +5276,8 @@ class Handler(BaseHTTPRequestHandler):
             uid = self._uid()
             if not uid:
                 return self._send(401, {"ok": False, "error": NOT_SIGNED_IN})
-            store = Store()
-            items = sorted(
-                (n for n in store.all("notifications") if n.get("userId") == uid),
-                key=lambda n: n.get("createdAt", 0), reverse=True,
-            )[:50]
+            items = sorted(Store().where("notifications", "userId", [uid]),
+                           key=lambda n: n.get("createdAt", 0), reverse=True)[:50]
             return self._send(200, {"ok": True, "notifications": items})
         if path == "/api/state":
             uid = self._uid()
@@ -5126,7 +5292,7 @@ class Handler(BaseHTTPRequestHandler):
             uid = self._uid()
             if not uid:
                 return self._send(401, {"ok": False, "error": NOT_SIGNED_IN})
-            if not RL.allow("report:" + uid, 30, 600):
+            if not RL.allow("reporthtml:" + uid, 30, 600):  # not the content-report bucket ("report:")
                 raise ApiError(TOO_MANY)
             page = build_report_html(Store(), uid, query).encode("utf-8")
             return self._send_bytes("text/html; charset=utf-8", page, cache="no-store", extra={
@@ -5190,7 +5356,7 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0].rstrip("/")
         if path == "/api/upload":
             uid = self._uid()
-            n = int(self.headers.get("Content-Length", "0") or "0")
+            n = self._clen()
             if not uid:
                 return self._send(401, {"ok": False, "error": NOT_SIGNED_IN})
             if n > MAX_UPLOAD:
@@ -5213,7 +5379,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._serve_tts(uid, self._body().get("text", ""))
         if path == "/api/upload-video":
             uid = self._uid()
-            n = int(self.headers.get("Content-Length", "0") or "0")
+            n = self._clen()
             if not uid:
                 return self._send(401, {"ok": False, "error": NOT_SIGNED_IN})
             if n > MAX_VIDEO:
@@ -5262,7 +5428,8 @@ class Handler(BaseHTTPRequestHandler):
                     with MUT_LOCK:  # one writer at a time; a fresh Store inside the lock avoids stale reads
                         store = Store()
                         _require_active(store, uid, name)
-                        data = fn(store, uid, a)
+                        with transaction():  # all-or-nothing: a failure half-way leaves no partial writes
+                            data = fn(store, uid, a)
             except BAD_INPUT:
                 # A malformed argument that slipped past validation (wrong JSON type, unadaptable SQL
                 # value) is the client's fault: a Persian error, not a 500. Logged so it gets fixed.
@@ -5314,6 +5481,8 @@ CREATE TABLE IF NOT EXISTS creds (
     uid text NOT NULL
 );
 ALTER TABLE creds ADD COLUMN IF NOT EXISTS iters integer;
+CREATE INDEX IF NOT EXISTS docs_notif_user_idx ON docs ((data->>'userId')) WHERE collection='notifications';
+CREATE INDEX IF NOT EXISTS docs_msg_conv_idx ON docs ((data->>'conversationId')) WHERE collection='messages';
 """
 
 def cmd_init_db():
@@ -5374,7 +5543,8 @@ def main():
             return print("mail sent to %s via %s:%d" % (sys.argv[2], SMTP_HOST, SMTP_PORT))
         if cmd == "sweep":  # sweep [HOURS]  -> delete unreferenced uploads older than HOURS (default 24)
             hours = float(sys.argv[2]) if len(sys.argv) > 2 else 24
-            return print("removed %d orphan file(s)" % sweep_orphans(hours))
+            print("removed %d orphan file(s)" % sweep_orphans(hours))
+            return print("pruned %d old notification(s)" % prune_notifications())
         print("unknown command: %s" % cmd)
         return
     cmd_init_db()
