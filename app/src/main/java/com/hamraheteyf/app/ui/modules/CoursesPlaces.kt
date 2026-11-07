@@ -192,7 +192,7 @@ fun PlacesScreen(onBack: () -> Unit) {
                         if (admin) OwnerActions({ editing = r }, { deleting = r })
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        if (r["phone"].isNotBlank()) TextButton(onClick = { open(Intent(Intent.ACTION_DIAL, Uri.parse("tel:${r["phone"]}"))) }) { Icon(Icons.Outlined.Call, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("تماس") }
+                        if (r["phone"].isNotBlank()) TextButton(onClick = { open(Intent(Intent.ACTION_DIAL, Uri.parse(telUri(r["phone"])))) }) { Icon(Icons.Outlined.Call, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("تماس") }
                         val q = if (r["lat"].isNotBlank() && r["lng"].isNotBlank()) "${r["lat"]},${r["lng"]}" else r["address"].ifBlank { "" }
                         if (q.isNotBlank()) TextButton(onClick = { open(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=" + Uri.encode(q)))) }) { Icon(Icons.Outlined.Directions, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("مسیریابی") }
                         if (tab == 0) TextButton(onClick = { reviewing = r }) { Icon(Icons.Outlined.StarOutline, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("نظرها") }

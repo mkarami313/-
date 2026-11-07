@@ -27,7 +27,11 @@ fun UpdateDialog(info: UpdateInfo, onDismiss: () -> Unit) {
         },
         confirmButton = {
             TextButton(enabled = progress < 0, onClick = {
-                if (!AppUpdater.canInstall(ctx)) { error = "اجازهٔ نصب از این برنامه را روشن کنید و دوباره بزنید."; AppUpdater.openInstallPermission(ctx); return@TextButton }
+                if (!AppUpdater.canInstall(ctx)) {
+                    error = if (AppUpdater.openInstallPermission(ctx)) "اجازهٔ نصب از این برنامه را روشن کنید و دوباره بزنید."
+                    else "از تنظیماتِ گوشی، «نصب برنامه‌های ناشناس» را برای همراهِ طیف روشن کنید و دوباره بزنید."
+                    return@TextButton
+                }
                 error = null; progress = 0
                 scope.launch {
                     try { AppUpdater.install(ctx, AppUpdater.download(ctx, info) { progress = it }); onDismiss() }

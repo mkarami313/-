@@ -59,8 +59,9 @@ fun HomeScreen(
     val client = rememberCommunity()
     val vm: HomeViewModel = viewModel(factory = appViewModelFactory { HomeViewModel(client) })
     val state by vm.state.collectAsState()
-    val user by container.userRepository.observeCurrentUser().collectAsState(null)
-    val unread by container.notificationRepository.observeUnreadCount().collectAsState(0)
+    // remember: a new Flow on every recomposition restarted both collections each time.
+    val user by remember(container) { container.userRepository.observeCurrentUser() }.collectAsState(null)
+    val unread by remember(container) { container.notificationRepository.observeUnreadCount() }.collectAsState(0)
     val ctx = LocalContext.current
     val interests = remember(user?.id) { user?.id?.let { OnboardingPrefs.interests(ctx, it) }.orEmpty() }
     val shortcuts = remember(tiles, interests) { buildShortcuts(tiles, interests) }

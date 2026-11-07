@@ -106,7 +106,17 @@ fun SettingsScreen(onBack: () -> Unit) {
         DeleteAccountDialog(busy, onDismiss = { showDelete = false }) { pw, report -> vm.deleteAccount(pw, report) }
     }
     if (showPassword) {
-        ChangePasswordDialog(busy, onDismiss = { showPassword = false }) { cur, new, report -> vm.changePassword(cur, new, report) }
+        val vault = com.hamraheteyf.app.security.LocalCredentialVault.current
+        ChangePasswordDialog(busy, onDismiss = { showPassword = false }) { cur, new, report ->
+            vm.changePassword(cur, new) { err ->
+                // The fingerprint sign-in still holds the OLD password: re-save it, or the next biometric login fails.
+                val email = user?.email
+                if (err == null && email != null && vault.hasCredentials() && vault.savedEmail().equals(email, ignoreCase = true)) {
+                    runCatching { vault.save(vault.savedEmail() ?: email, new) }
+                }
+                report(err)
+            }
+        }
     }
 
     exportFile?.let { f ->

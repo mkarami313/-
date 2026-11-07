@@ -22,7 +22,8 @@ object PushNotifier {
 
     const val CHANNEL_ID = "hamrah_events"
     private const val PREFS = "hamrah_push"
-    private const val KEY_SHOWN = "shown_ids"
+    private const val KEY_SHOWN = "shown_ids"          // legacy unordered set (migrated on first use)
+    private const val KEY_SHOWN_LIST = "shown_ids_list"
     private const val MAX_REMEMBERED = 300
 
     fun ensureChannel(context: Context) {
@@ -67,15 +68,20 @@ object PushNotifier {
         }
     }
 
-    /** Records [notifId] as shown; returns false if it was already present. */
+    /**
+     * Records [notifId] as shown; returns false if it was already present. Synchronized because FCM
+     * (its own thread) and the poll can deliver the same id at the same moment. Kept as an ordered,
+     * newline-joined list so trimming drops the OLDEST ids (a StringSet has no order, so it used to
+     * drop arbitrary — possibly recent — ids and let them be shown again).
+     */
+    @Synchronized
     private fun markShown(context: Context, notifId: String): Boolean {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val shown = prefs.getStringSet(KEY_SHOWN, emptySet()).orEmpty().toMutableSet()
+        val shown = prefs.getString(KEY_SHOWN_LIST, null)?.split('\n')?.filter { it.isNotEmpty() }
+            ?: runCatching { prefs.getStringSet(KEY_SHOWN, emptySet()).orEmpty().toList() }.getOrDefault(emptyList())
         if (notifId in shown) return false
-        shown.add(notifId)
-        // Bound the set so it can't grow forever.
-        val trimmed = if (shown.size > MAX_REMEMBERED) shown.toList().takeLast(MAX_REMEMBERED).toSet() else shown
-        prefs.edit().putStringSet(KEY_SHOWN, trimmed).apply()
+        val next = (shown + notifId).takeLast(MAX_REMEMBERED)
+        prefs.edit().putString(KEY_SHOWN_LIST, next.joinToString("\n")).remove(KEY_SHOWN).apply()
         return true
     }
 }

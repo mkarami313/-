@@ -122,7 +122,12 @@ enum class ContentType(val label: String) {
     MESSAGE("پیام"),
     USER("کاربر"),
     GUIDE("راهنما"),
-    DONATION("آگهی دست‌به‌دست");
+    DONATION("آگهی دست‌به‌دست"),
+    // Community v2 reports (server REPORT_TYPES): without these one forum report broke the admin's whole snapshot.
+    TOPIC("گفتگوی انجمن"),
+    POST("پاسخ در انجمن"),
+    LEARN("مطلب آموزشی"),
+    GROUP("کانون");
 }
 
 @Serializable

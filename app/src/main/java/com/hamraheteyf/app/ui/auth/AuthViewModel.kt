@@ -35,10 +35,13 @@ class AuthViewModel(
      */
     fun login(email: String, password: String, remember: Boolean = false) {
         _state.value = AuthUiState(loading = true)
-        viewModelScope.launch {
-            when (val r = auth.login(email, password)) {
+        // NonCancellable (as in register): auth.login suspends inside onAuthenticated (first refresh) AFTER the
+        // session went active; if the torn-down screen cancelled it there, polling, reminders, push registration
+        // and the fingerprint save below would all be skipped.
+        viewModelScope.launch(kotlinx.coroutines.NonCancellable) {
+            when (val r = auth.login(email.trim(), password)) {
                 is DataResult.Success -> {
-                    if (remember) vault?.save(email, password) else vault?.clear()
+                    if (remember) vault?.save(email.trim(), password) else vault?.clear()
                     _state.value = AuthUiState() // root switches automatically
                 }
                 is DataResult.Error -> _state.value = AuthUiState(error = r.message)
