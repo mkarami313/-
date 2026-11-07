@@ -146,6 +146,8 @@ class Store:
 
     def __init__(self):
         self._cache = {}
+        self._idx = {}    # coll -> {id: doc}, built lazily so get() is O(1) instead of a scan
+        self._memo = {}   # key -> (deps, value): per-request derived data, dropped when a dep is written
 
     def all(self, coll):
         if coll not in self._cache:
@@ -156,10 +158,31 @@ class Store:
         return self._cache[coll]
 
     def get(self, coll, _id):
-        for d in self.all(coll):
-            if d.get("id") == _id:
-                return d
-        return None
+        if not isinstance(_id, str):
+            return None
+        idx = self._idx.get(coll)
+        if idx is None:
+            idx = self._idx[coll] = {d.get("id"): d for d in self.all(coll)}
+        return idx.get(_id)
+
+    def memo(self, key, deps, fn):
+        """Cache fn() for this request; any put/delete on a collection in `deps` invalidates it."""
+        hit = self._memo.get(key)
+        if hit is None:
+            hit = self._memo[key] = (deps, fn())
+        return hit[1]
+
+    def _touched(self, coll, _id, doc=None):
+        idx = self._idx.get(coll)
+        if idx is not None:
+            if coll not in self._cache:  # list not loaded: the index can't be trusted any more
+                self._idx.pop(coll, None)
+            elif doc is None:
+                idx.pop(_id, None)
+            else:
+                idx[_id] = doc
+        for k in [k for k, (deps, _) in self._memo.items() if coll in deps]:
+            del self._memo[k]
 
     def put(self, coll, doc):
         cur = conn().cursor()
@@ -177,6 +200,7 @@ class Store:
                     break
             else:
                 lst.append(doc)
+        self._touched(coll, doc["id"], doc)
 
     def delete(self, coll, _id):
         cur = conn().cursor()
@@ -185,6 +209,7 @@ class Store:
         lst = self._cache.get(coll)
         if lst is not None:
             self._cache[coll] = [d for d in lst if d.get("id") != _id]
+        self._touched(coll, _id)
 
     def delete_where(self, coll, pred):
         for d in list(self.all(coll)):
@@ -499,7 +524,12 @@ def _fcm_fanout(pairs, title, body, ntype, related_id):
 
 def push_to_user(store, user_id, nid, ntype, title, body, related_id):
     """Fan out a push to the user's registered devices, off the request thread."""
-    tokens = [t["id"] for t in store.all("pushTokens") if t.get("userId") == user_id]
+    def build():
+        by_user = {}
+        for t in store.all("pushTokens"):
+            by_user.setdefault(t.get("userId"), []).append(t["id"])
+        return by_user
+    tokens = store.memo("push_by_user", ("pushTokens",), build).get(user_id, [])
     _fcm_fanout([(t, nid) for t in tokens], title, body, ntype, related_id)
 
 
@@ -521,23 +551,48 @@ def add_notification(store, user_id, ntype, title, body, related_id=None, force=
     push_to_user(store, user_id, nid, ntype, title, body, related_id)
 
 
+def _active_roles(store):
+    """{(groupId, userId): role} of every ACTIVE membership — one scan per request, not per check."""
+    def build():
+        return {(m.get("groupId"), m.get("userId")): m.get("role")
+                for m in store.all("memberships") if m.get("status") == "ACTIVE"}
+    return store.memo("active_roles", ("memberships",), build)
+
+
 def is_active_member(store, group_id, uid):
-    return uid is not None and any(
-        m.get("groupId") == group_id and m.get("userId") == uid and m.get("status") == "ACTIVE"
-        for m in store.all("memberships")
-    )
+    return uid is not None and isinstance(group_id, str) and (group_id, uid) in _active_roles(store)
 
 
 def can_manage(store, group_id, uid):
-    return uid is not None and any(
-        m.get("groupId") == group_id and m.get("userId") == uid and m.get("status") == "ACTIVE"
-        and m.get("role") in ("OWNER", "MODERATOR")
-        for m in store.all("memberships")
-    )
+    return uid is not None and isinstance(group_id, str) \
+        and _active_roles(store).get((group_id, uid)) in ("OWNER", "MODERATOR")
 
 
 def _s(v):
-    return (v or "").strip()
+    """Trimmed string from a JSON arg; numbers are stringified, any other type reads as empty."""
+    if isinstance(v, str):
+        return v.strip()
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return str(v)
+    return ""
+
+
+def _sid(v, limit=100):
+    """An id argument: a non-empty string of sane length, else None."""
+    return v if isinstance(v, str) and 0 < len(v) <= limit else None
+
+
+def _int(v, default=0, lo=None, hi=None):
+    """Lenient integer arg (accepts 3, 3.0, "3"); bad input becomes `default`, then clamped."""
+    try:
+        n = int(v) if not isinstance(v, bool) and v is not None and v != "" else default
+    except (TypeError, ValueError, OverflowError):
+        n = default
+    if lo is not None:
+        n = max(lo, n)
+    if hi is not None:
+        n = min(hi, n)
+    return n
 
 
 # --------------------------------------------------------------------------------------
@@ -582,12 +637,14 @@ def _blocked_between(store, a, b):
 
 def _blocked_ids(store, uid):
     """Ids hidden from `uid`: everyone they blocked plus everyone who blocked them."""
-    me = store.get("users", uid) or {}
-    out = set(me.get("blockedUserIds") or [])
-    for u in store.all("users"):
-        if uid in (u.get("blockedUserIds") or []):
-            out.add(u["id"])
-    return out
+    def build():
+        me = store.get("users", uid) or {}
+        out = set(me.get("blockedUserIds") or [])
+        for u in store.all("users"):
+            if uid in (u.get("blockedUserIds") or []):
+                out.add(u["id"])
+        return out
+    return set(store.memo(("blocked", uid), ("users",), build))
 
 
 # ---- User / professional / children / verification ----
@@ -891,6 +948,18 @@ def a_exportMyData(store, uid, args):
         "notifications": [n for n in store.all("notifications") if n.get("userId") == uid],
         "files": [{k: f.get(k) for k in ("id", "name", "mime", "size", "createdAt")}
                   for f in store.all("files") if f.get("ownerId") == uid],
+        # community v2 lives in SQL tables, not in the docs collections above
+        "forumTopics": _q("SELECT id, forum_id, group_id, anonymous, title, body, images, poll, status, created_at, "
+                          "edited_at FROM f_topics WHERE author_id=%s ORDER BY created_at", (uid,)),
+        "forumReplies": _q("SELECT id, topic_id, body, images, status, created_at, edited_at FROM f_posts "
+                           "WHERE author_id=%s ORDER BY created_at", (uid,)),
+        "learnItems": _q("SELECT id, kind, category_id, title, summary, body, cover_id, video_id, video_url, status, "
+                         "created_at FROM l_items WHERE author_id=%s ORDER BY created_at", (uid,)),
+        "reviews": _q("SELECT target_type, target_id, rating, body, created_at, updated_at FROM r_reviews "
+                      "WHERE user_id=%s", (uid,)),
+        "forumBookmarks": [r["topic_id"] for r in _q("SELECT topic_id FROM f_bookmarks WHERE user_id=%s", (uid,))],
+        "forumFollows": [r["topic_id"] for r in _q("SELECT topic_id FROM f_follows WHERE user_id=%s", (uid,))],
+        "learnSaved": [r["item_id"] for r in _q("SELECT item_id FROM l_saved WHERE user_id=%s", (uid,))],
     }
     lines = [
         "# نسخهٔ اطلاعات حساب شما",
@@ -1025,6 +1094,8 @@ def wipe_account(store, uid):
         for d in list(store.all("r_" + kind)):
             if d.get("ownerId") == uid:
                 store.delete("r_" + kind, d["id"])
+                if kind == "place":
+                    _x("DELETE FROM r_reviews WHERE target_type='place' AND target_id=%s", (d["id"],))
             elif kind == "slot" and d.get("bookedBy") == uid:
                 d.update(status="OPEN", bookedBy="", bookedByName="", updatedAt=now_ms())
                 store.put("r_slot", d)
@@ -1066,6 +1137,10 @@ def wipe_account(store, uid):
     # Community v2 (SQL tables): threads stay readable under «کاربرِ حذف‌شده»; personal traces go.
     _x("UPDATE f_topics SET author_id=%s, anonymous=true, images='[]' WHERE author_id=%s", (DELETED_USER_ID, uid))
     _x("UPDATE f_posts SET author_id=%s, images='[]' WHERE author_id=%s", (DELETED_USER_ID, uid))
+    _x("UPDATE f_topics SET last_post_by=%s WHERE last_post_by=%s", (DELETED_USER_ID, uid))
+    # Their likes go, so the counters on what they liked must drop with them.
+    _x("UPDATE f_topics SET like_count=greatest(like_count-1,0) WHERE id IN (SELECT target_id FROM f_likes WHERE user_id=%s)", (uid,))
+    _x("UPDATE f_posts SET like_count=greatest(like_count-1,0) WHERE id IN (SELECT target_id FROM f_likes WHERE user_id=%s)", (uid,))
     for tbl, col in (("f_likes", "user_id"), ("f_bookmarks", "user_id"), ("f_follows", "user_id"),
                      ("f_votes", "user_id"), ("f_reads", "user_id"), ("l_saved", "user_id"), ("r_reviews", "user_id")):
         _x("DELETE FROM %s WHERE %s=%%s" % (tbl, col), (uid,))
@@ -1176,14 +1251,22 @@ def a_toggleHelpful(store, uid, args):
 
 def a_createGroup(store, uid, args):
     _require(uid)
-    if len(_s(args.get("title"))) < 3:
+    title = _s(args.get("title"))
+    if len(title) < 3:
         raise ApiError("عنوان گروه را کامل‌تر بنویسید.")
+    if len(title) > 80:
+        raise ApiError("عنوانِ گروه حداکثر ۸۰ نویسه باشد.")
+    vis = args.get("visibility") or "PUBLIC"
+    if vis not in ("PUBLIC", "PRIVATE"):
+        raise ApiError("نوعِ گروه نامعتبر است.")
+    if not is_admin(store, uid) and not RL.allow("mkgroup:" + uid, 5, 86400):
+        raise ApiError(TOO_MANY)
     gid = new_id("g")
     store.put("groups", {
-        "id": gid, "ownerId": uid, "title": _s(args.get("title")),
-        "description": _s(args.get("description")), "category": _s(args.get("category")) or None,
-        "city": _s(args.get("city")) or None, "visibility": args.get("visibility") or "PUBLIC",
-        "rules": _s(args.get("rules")) or None, "memberCount": 1,
+        "id": gid, "ownerId": uid, "title": title,
+        "description": _s(args.get("description"))[:1000], "category": _s(args.get("category"))[:40] or None,
+        "city": _s(args.get("city"))[:40] or None, "visibility": vis,
+        "rules": _s(args.get("rules"))[:2000] or None, "memberCount": 1,
         "createdAt": now_ms(), "updatedAt": now_ms(),
     })
     store.put("memberships", {
@@ -1195,7 +1278,7 @@ def a_createGroup(store, uid, args):
 
 def a_joinOrRequest(store, uid, args):
     _require(uid)
-    gid = args.get("groupId")
+    gid = _sid(args.get("groupId"))
     g = store.get("groups", gid)
     if not g:
         raise ApiError("گروه یافت نشد.")
@@ -1245,7 +1328,7 @@ def a_leave(store, uid, args):
 def a_approveMember(store, uid, args):
     _require(uid)
     gid = args.get("groupId")
-    if not can_manage(store, gid, uid):
+    if not (can_manage(store, gid, uid) or (is_admin(store, uid) and store.get("groups", gid))):
         raise ApiError("اجازهٔ مدیریت این گروه را ندارید.")
     changed = False
     for m in store.all("memberships"):
@@ -1268,12 +1351,17 @@ def a_approveMember(store, uid, args):
 def a_removeMember(store, uid, args):
     _require(uid)
     gid = args.get("groupId")
-    if not can_manage(store, gid, uid):
+    admin = is_admin(store, uid)
+    if not (can_manage(store, gid, uid) or (admin and store.get("groups", gid))):
         raise ApiError("اجازهٔ مدیریت این گروه را ندارید.")
     target = next((m for m in store.all("memberships")
                    if m.get("groupId") == gid and m.get("userId") == args.get("userId")), None)
     if target and target.get("role") == "OWNER":
         raise ApiError("نمی‌توان مدیر گروه را حذف کرد.")
+    g0 = store.get("groups", gid) or {}
+    if target and target.get("role") == "MODERATOR" and target.get("status") == "ACTIVE" \
+            and args.get("userId") != uid and g0.get("ownerId") != uid and not admin:
+        raise ApiError("فقط سازندهٔ گروه می‌تواند ناظر را حذف کند.")
     was_active = target and target.get("status") == "ACTIVE"
     store.delete_where("memberships",
                        lambda m: m.get("groupId") == gid and m.get("userId") == args.get("userId"))
@@ -1388,6 +1476,8 @@ def a_acceptConversation(store, uid, args):
     conv = _conv_guard(store, uid, args.get("conversationId"))
     if conv.get("initiatorId") == uid:
         raise ApiError("پذیرش گفتگو با طرف مقابل است.")
+    if conv.get("status") not in ("REQUESTED", "ACCEPTED"):
+        raise ApiError("این درخواستِ گفتگو دیگر فعال نیست.")
     conv["status"] = "ACCEPTED"
     conv["updatedAt"] = now_ms()
     store.put("conversations", conv)
@@ -1432,6 +1522,8 @@ def a_sendMessage(store, uid, args):
         raise ApiError("پیام خالی است.")
     if len(body) > 4000:
         raise ApiError("پیام بیش از حد طولانی است.")
+    if not RL.allow("msg:" + uid, 60, 60):
+        raise ApiError(TOO_MANY)
     other = next(p for p in conv["participantIds"] if p != uid)
     if _blocked_between(store, uid, other):
         raise ApiError("امکان ارسال پیام به این کاربر وجود ندارد.")
@@ -1719,18 +1811,19 @@ def _set_content_status(store, uid, ctype, cid, status, action, reason):
         raise ApiError("ثبت دلیل تصمیم الزامی است.")
     coll = {"QUESTION": "questions", "ANSWER": "answers", "GROUP_POST": "posts",
             "GUIDE": "guides", "DONATION": "donations"}.get(ctype)
+    if not _sid(cid):
+        raise ApiError("محتوا یافت نشد.")
     if ctype in SQL_CONTENT:
         if not _x("UPDATE %s SET status=%%s WHERE id=%%s" % SQL_CONTENT[ctype], (status, cid)):
             raise ApiError("محتوا یافت نشد.")
-        if ctype == "POST" and status != "PUBLISHED":
-            pr = _q("SELECT topic_id FROM f_posts WHERE id=%s", (cid,), one=True)
-            _x("UPDATE f_topics SET reply_count=(SELECT count(*) FROM f_posts WHERE topic_id=%s AND status='PUBLISHED') "
-               "WHERE id=%s", (pr["topic_id"], pr["topic_id"]))
+        if ctype == "POST":  # reply_count / expert_reply_count / best answer follow the change
+            _recount_topic(_q("SELECT topic_id FROM f_posts WHERE id=%s", (cid,), one=True)["topic_id"])
     elif ctype == "GROUP":
         g = store.get("groups", cid)
         if not g:
             raise ApiError("محتوا یافت نشد.")
         g["status"] = "ARCHIVED"
+        g["archivedByAdmin"] = True  # the owner can't simply restore what moderation closed
         store.put("groups", g)
     elif coll:
         doc = store.get(coll, cid)
@@ -2212,6 +2305,8 @@ def _delete_rec(store, kind, d):
     for fid in _rec_file_ids(REC_KINDS[kind], d):
         _drop_file(store, d.get("ownerId"), fid)
     store.delete("r_" + kind, d["id"])
+    if kind == "place":  # its reviews would otherwise linger with nothing to point at
+        _x("DELETE FROM r_reviews WHERE target_type='place' AND target_id=%s", (d["id"],))
 
 
 def a_recSave(store, uid, args):
@@ -2352,9 +2447,15 @@ def a_search(store, uid, args):
         for it in a_learnList(store, uid, {"q": q, "size": 15})["items"]:
             add("learn", it, it["title"], "ویدیوی آموزشی" if it["kind"] == "video" else "مقالهٔ آموزشی")
     if "directory" not in off:
+        admin = is_admin(store, uid)
         for d in store.all("users"):
-            if d.get("accountType") in PRO_TYPES and d.get("status") not in ("BLOCKED",) and d["id"] not in hidden and hit(d.get("displayName"), d.get("city"), d.get("bio")):
-                add("user", d, d.get("displayName", ""), "متخصص" + (" · " + d["city"] if d.get("city") else ""))
+            if d.get("accountType") not in PRO_TYPES or d.get("status") in ("BLOCKED", "DELETED") or d["id"] in hidden:
+                continue
+            priv = d.get("privacy") or {}
+            city = d.get("city") if (admin or priv.get("showCity", False)) else None  # honour the privacy switches
+            bio = d.get("bio") if (admin or priv.get("showBio", True)) else None
+            if hit(d.get("displayName"), city, bio):
+                add("user", d, d.get("displayName", ""), "متخصص" + (" · " + city if city else ""))
     if "donations" not in off:
         for d in store.all("donations"):
             if d.get("status") in ("AVAILABLE", "RESERVED") and hit(d.get("title"), d.get("description"), d.get("city")):
@@ -3031,12 +3132,22 @@ def _readable_file_ids(store, uid):
     return out
 
 
-def _community_file(fid):
-    """Images of visible topics/posts and covers/videos of published learning items."""
+def _community_file(fid, store=None, uid=None):
+    """Images of published topics/replies the caller may see (a private group's pictures stay with
+    its members; a reply's pictures go when its topic is hidden) and covers/videos of published
+    learning items."""
+    if _q("SELECT 1 FROM l_items WHERE status='PUBLISHED' AND (cover_id=%s OR video_id=%s) LIMIT 1", (fid, fid), one=True):
+        return True
     j = json.dumps([fid])
-    return bool(_q("SELECT 1 FROM f_topics WHERE status='PUBLISHED' AND images @> %s::jsonb LIMIT 1", (j,), one=True)
-                or _q("SELECT 1 FROM f_posts WHERE status='PUBLISHED' AND images @> %s::jsonb LIMIT 1", (j,), one=True)
-                or _q("SELECT 1 FROM l_items WHERE status='PUBLISHED' AND (cover_id=%s OR video_id=%s) LIMIT 1", (fid, fid), one=True))
+    rows = _q("SELECT group_id FROM f_topics WHERE status='PUBLISHED' AND images @> %s::jsonb "
+              "UNION SELECT t.group_id FROM f_posts p JOIN f_topics t ON t.id=p.topic_id "
+              "WHERE p.status='PUBLISHED' AND t.status='PUBLISHED' AND p.images @> %s::jsonb LIMIT 20", (j, j))
+    for r in rows:
+        if not r["group_id"]:
+            return True
+        if store is not None and _can_see_group(store, r["group_id"], uid, is_admin(store, uid)):
+            return True
+    return False
 
 
 def a_fileUrls(store, uid, args):
@@ -3055,7 +3166,7 @@ def a_fileUrls(store, uid, args):
         if not (admin or doc.get("ownerId") == uid):
             if readable is None:
                 readable = _readable_file_ids(store, uid)
-            if fid not in readable and not _community_file(fid):
+            if fid not in readable and not _community_file(fid, store, uid):
                 continue
         urls[fid] = sign_file(fid, exp)[0]
     return {"urls": urls, "expiresAt": exp * 1000}
@@ -3127,6 +3238,12 @@ CREATE TABLE IF NOT EXISTS r_reviews (
     PRIMARY KEY(target_type, target_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS r_reviews_target_idx ON r_reviews(target_type, target_id);
+CREATE INDEX IF NOT EXISTS r_reviews_user_idx ON r_reviews(user_id);
+CREATE INDEX IF NOT EXISTS l_saved_user_idx ON l_saved(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS f_topics_images_gin ON f_topics USING gin(images jsonb_path_ops);
+CREATE INDEX IF NOT EXISTS f_posts_images_gin ON f_posts USING gin(images jsonb_path_ops);
+CREATE INDEX IF NOT EXISTS l_items_cover_idx ON l_items(cover_id);
+CREATE INDEX IF NOT EXISTS l_items_video_idx ON l_items(video_id);
 """
 
 # Forum tree, seeded once (ids are stable so later seeds can add without duplicating).
@@ -3295,21 +3412,33 @@ def _migrate_v1_content():
 
 # ---- people ----
 
+def _pros_by_user(store):
+    return store.memo("pros_by_user", ("professionals",),
+                      lambda: {p.get("userId"): p for p in store.all("professionals")})
+
+
 def _verified_pro_ids(store):
-    return {p.get("userId") for p in store.all("professionals") if p.get("verificationStatus") == "VERIFIED"}
+    return {k for k, p in _pros_by_user(store).items() if p.get("verificationStatus") == "VERIFIED"}
+
+
+ANON_NAME = "کاربرِ ناشناس"
+
+
+def _anon_card():
+    return {"id": "", "name": ANON_NAME, "photoUrl": None, "badge": "", "expert": False, "anonymous": True}
 
 
 def _author(store, aid, pros=None, anonymous=False, viewer=None, admin=False):
     """Public author card. Anonymous topics show no identity to anyone but the author and admins."""
     if anonymous and aid != viewer and not admin:
-        return {"id": "", "name": "کاربرِ ناشناس", "photoUrl": None, "badge": "", "anonymous": True}
+        return _anon_card()
     u = store.get("users", aid) or {}
     pros = pros if pros is not None else _verified_pro_ids(store)
     badge = ""
     if u.get("isAdmin"):
         badge = "مدیر"
     elif aid in pros:
-        pr = next((p for p in store.all("professionals") if p.get("userId") == aid), {}) or {}
+        pr = _pros_by_user(store).get(aid) or {}
         badge = pr.get("specialty") or pr.get("title") or "متخصصِ تأییدشده"
     elif u.get("accountType") == "FAMILY":
         badge = "خانواده"
@@ -3345,11 +3474,15 @@ def _check_images(store, uid, images):
 
 
 def _forum(fid):
-    return _q("SELECT * FROM f_forums WHERE id=%s AND NOT archived", (fid,), one=True) if fid else None
+    return _q("SELECT * FROM f_forums WHERE id=%s AND NOT archived", (fid,), one=True) if _sid(fid) else None
 
 
 def _topic_row(tid):
-    return _q("SELECT * FROM f_topics WHERE id=%s", (tid,), one=True) if isinstance(tid, str) else None
+    return _q("SELECT * FROM f_topics WHERE id=%s", (tid,), one=True) if _sid(tid) else None
+
+
+def _post_row(pid):
+    return _q("SELECT * FROM f_posts WHERE id=%s", (pid,), one=True) if _sid(pid) else None
 
 
 def _topic_visible(store, t, uid, admin):
@@ -3447,12 +3580,20 @@ SORTS = {
 }
 
 
+def _visible_group_ids(store, uid, admin):
+    """Groups whose topics may appear in global lists: public ones, and private ones I'm active in."""
+    roles = _active_roles(store)
+    return [g["id"] for g in store.all("groups")
+            if admin or (g.get("status") != "ARCHIVED"
+                         and (g.get("visibility") == "PUBLIC" or (g["id"], uid) in roles))]
+
+
 def a_forumTopics(store, uid, args):
     """Paged topic list. Filters: forumId (includes sub-forums), groupId, clinic, mine, bookmarked,
     followed, q (search). sort: active|new|hot|unanswered|top. Paging by `page` (0-based)."""
     admin = is_admin(store, uid)
     where, params = ["t.status='PUBLISHED'" if not admin else "t.status<>'REMOVED'"], []
-    fid, gid = args.get("forumId"), args.get("groupId")
+    fid, gid = _sid(args.get("forumId")), _sid(args.get("groupId"))
     if fid:
         ids = [fid] + [r["id"] for r in _q("SELECT id FROM f_forums WHERE parent_id=%s", (fid,))]
         where.append("t.forum_id = ANY(%s)")
@@ -3464,10 +3605,8 @@ def a_forumTopics(store, uid, args):
         params.append(gid)
     else:
         # global lists never show topics of groups the caller can't see
-        visible_groups = [g["id"] for g in store.all("groups")
-                          if g.get("visibility") == "PUBLIC" or admin or is_active_member(store, g["id"], uid)]
         where.append("(t.group_id IS NULL OR t.group_id = ANY(%s))")
-        params.append(visible_groups)
+        params.append(_visible_group_ids(store, uid, admin))
     if args.get("clinic"):
         where.append("t.forum_id IN (SELECT id FROM f_forums WHERE kind='clinic')")
     if args.get("mine"):
@@ -3479,13 +3618,15 @@ def a_forumTopics(store, uid, args):
     if args.get("followed"):
         where.append("t.id IN (SELECT topic_id FROM f_follows WHERE user_id=%s)")
         params.append(uid)
-    if args.get("authorId"):
+    author = _sid(args.get("authorId"))
+    if author:
         where.append("t.author_id=%s AND NOT t.anonymous")
-        params.append(str(args.get("authorId")))
+        params.append(author)
     q = _s(args.get("q"))[:80]
     if q:
         where.append("(t.title ILIKE %s OR t.body ILIKE %s)")
-        params += ["%" + q + "%", "%" + q + "%"]
+        pat = "%" + re.sub(r"([%_\\])", r"\\\1", q) + "%"   # the user's % and _ are literal
+        params += [pat, pat]
     hidden = list(_hidden_authors(store, uid, admin))
     if hidden:
         where.append("NOT (t.author_id = ANY(%s))")
@@ -3493,13 +3634,48 @@ def a_forumTopics(store, uid, args):
     sort = args.get("sort") if args.get("sort") in SORTS else "active"
     if sort == "unanswered":
         where.append("t.reply_count=0")
-    page = max(0, min(int(args.get("page") or 0), 400))
-    size = max(5, min(int(args.get("size") or PAGE_TOPICS), 50))
+    page = _int(args.get("page"), 0, 0, 400)
+    size = _int(args.get("size"), PAGE_TOPICS, 5, 50)
     order = SORTS[sort] % {"now": now_ms()}
-    rows = _q("SELECT t.* FROM f_topics t WHERE %s ORDER BY %s LIMIT %d OFFSET %d"
+    rows = _q("SELECT t.* FROM f_topics t WHERE %s ORDER BY %s, t.id LIMIT %d OFFSET %d"
               % (" AND ".join(where), order, size + 1, page * size), tuple(params))
     more = len(rows) > size
     return {"items": _cards(store, uid, admin, rows[:size]), "hasMore": more, "page": page}
+
+
+def _reply_gate(store, t, uid, admin, pros):
+    """-> (can_reply, hint). One place for the rules the detail screen shows and forumReply enforces."""
+    forum = _forum(t.get("forum_id")) if t.get("forum_id") else None
+    is_clinic = bool(forum and forum["kind"] == "clinic")
+    member_ok = not t.get("group_id") or admin or is_active_member(store, t["group_id"], uid)
+    blocked = t["author_id"] != uid and _blocked_between(store, uid, t["author_id"])
+    if t["status"] != "PUBLISHED":
+        return False, "این گفتگو در دسترس نیست."
+    if t["locked"]:
+        return False, "این گفتگو بسته شده است."
+    if is_clinic and not (uid in pros or admin or t["author_id"] == uid):
+        return False, "در کلینیک فقط متخصصانِ تأییدشده و پرسش‌کننده پاسخ می‌دهند."
+    if not member_ok:
+        return False, "برای پاسخ دادن عضوِ گروه شوید."
+    if blocked:
+        return False, "امکانِ پاسخ در این گفتگو برای شما وجود ندارد."
+    return True, ""
+
+
+def _post_author(store, p_author, t, pros, uid, admin):
+    """A reply's author card. The opener of an anonymous topic stays anonymous in their own replies,
+    otherwise answering in the thread would unmask them."""
+    if t.get("anonymous") and p_author == t["author_id"]:
+        return _author(store, p_author, pros, True, uid, admin)
+    return _author(store, p_author, pros)
+
+
+def _visible_post_count(t, uid, admin, hidden):
+    status_sql = "status<>'REMOVED'" if admin else "status<>'REMOVED' AND (status='PUBLISHED' OR author_id=%s)"
+    sp = () if admin else (uid,)
+    return status_sql, sp, _q(
+        "SELECT count(*) AS n FROM f_posts WHERE topic_id=%%s AND %s AND NOT (author_id = ANY(%%s))" % status_sql,
+        (t["id"],) + sp + (hidden,), one=True)["n"]
 
 
 def a_forumTopic(store, uid, args):
@@ -3508,16 +3684,14 @@ def a_forumTopic(store, uid, args):
     t = _topic_row(args.get("topicId"))
     if not _topic_visible(store, t, uid, admin):
         raise ApiError("این گفتگو پیدا نشد یا حذف شده است.")
-    hidden = list(_hidden_authors(store, uid, admin)) or ["-"]
-    status_sql = "status<>'REMOVED'" if admin else "status<>'REMOVED' AND (status='PUBLISHED' OR author_id=%s)"
-    sp = () if admin else (uid,)
-    total = _q("SELECT count(*) AS n FROM f_posts WHERE topic_id=%%s AND %s AND NOT (author_id = ANY(%%s))" % status_sql,
-               (t["id"],) + sp + (hidden,), one=True)["n"]
+    hidden_set = _hidden_authors(store, uid, admin)
+    hidden = list(hidden_set) or ["-"]
+    status_sql, sp, total = _visible_post_count(t, uid, admin, hidden)
     pages = max(1, (total + PAGE_POSTS - 1) // PAGE_POSTS)
     page = args.get("page")
-    page = pages - 1 if page in (None, -1, "last") else max(0, min(int(page), pages - 1))
+    page = pages - 1 if page in (None, -1, "last") else _int(page, 0, 0, pages - 1)
     rows = _q("SELECT * FROM f_posts WHERE topic_id=%%s AND %s AND NOT (author_id = ANY(%%s)) "
-              "ORDER BY created_at LIMIT %d OFFSET %d" % (status_sql, PAGE_POSTS, page * PAGE_POSTS),
+              "ORDER BY created_at, id LIMIT %d OFFSET %d" % (status_sql, PAGE_POSTS, page * PAGE_POSTS),
               (t["id"],) + sp + (hidden,))
     pros = _verified_pro_ids(store)
     liked = {r["target_id"] for r in _q("SELECT target_id FROM f_likes WHERE user_id=%s AND target_id = ANY(%s)",
@@ -3525,9 +3699,10 @@ def a_forumTopic(store, uid, args):
     quote_ids = [p["quote_id"] for p in rows if p.get("quote_id")]
     quotes = {}
     if quote_ids:
-        for qp in _q("SELECT id, author_id, body, status FROM f_posts WHERE id = ANY(%s)", (quote_ids,)):
-            if qp["status"] == "PUBLISHED":
-                quotes[qp["id"]] = {"id": qp["id"], "authorName": _author(store, qp["author_id"], pros)["name"],
+        for qp in _q("SELECT id, author_id, body, status FROM f_posts WHERE id = ANY(%s) AND topic_id=%s",
+                     (quote_ids, t["id"])):
+            if qp["status"] == "PUBLISHED" and qp["author_id"] not in hidden_set:
+                quotes[qp["id"]] = {"id": qp["id"], "authorName": _post_author(store, qp["author_id"], t, pros, uid, admin)["name"],
                                     "excerpt": re.sub(r"\s+", " ", qp["body"])[:160]}
     if quote_ids and t["id"] in quote_ids:  # quoting the opening post
         quotes[t["id"]] = {"id": t["id"], "authorName": _author(store, t["author_id"], pros, t["anonymous"], uid, admin)["name"],
@@ -3535,13 +3710,14 @@ def a_forumTopic(store, uid, args):
     now = now_ms()
     can_mod = admin or (t.get("group_id") and can_manage(store, t["group_id"], uid))
     posts = [{
-        "id": p["id"], "author": _author(store, p["author_id"], pros), "body": p["body"] if p["status"] == "PUBLISHED" or admin or p["author_id"] == uid else "",
+        "id": p["id"], "author": _post_author(store, p["author_id"], t, pros, uid, admin),
+        "body": p["body"] if p["status"] == "PUBLISHED" or admin or p["author_id"] == uid else "",
         "images": p.get("images") or [], "quote": quotes.get(p.get("quote_id")), "status": p["status"],
         "expert": bool(p["is_expert"]), "createdAt": p["created_at"], "editedAt": p["edited_at"],
         "likeCount": p["like_count"], "liked": p["id"] in liked, "mine": p["author_id"] == uid,
         "accepted": p["id"] == t.get("accepted_post_id"),
         "canEdit": p["author_id"] == uid and now - p["created_at"] < TOPIC_EDIT_WINDOW_MS,
-        "canDelete": p["author_id"] == uid or can_mod,
+        "canDelete": p["author_id"] == uid or bool(can_mod),
     } for p in rows]
     _x("INSERT INTO f_reads(topic_id,user_id,read_at) VALUES(%s,%s,%s) ON CONFLICT(topic_id,user_id) "
        "DO UPDATE SET read_at=EXCLUDED.read_at", (t["id"], uid, now))
@@ -3552,20 +3728,7 @@ def a_forumTopic(store, uid, args):
     followed = bool(_q("SELECT 1 FROM f_follows WHERE topic_id=%s AND user_id=%s", (t["id"], uid), one=True))
     bookmarked = bool(_q("SELECT 1 FROM f_bookmarks WHERE topic_id=%s AND user_id=%s", (t["id"], uid), one=True))
     is_clinic = bool(forum and forum["kind"] == "clinic")
-    me_pro = uid in pros
-    blocked_reply = t["author_id"] != uid and _blocked_between(store, uid, t["author_id"])
-    can_reply = (t["status"] == "PUBLISHED" and not t["locked"] and not blocked_reply
-                 and (not is_clinic or me_pro or admin or t["author_id"] == uid)
-                 and (not t.get("group_id") or is_active_member(store, t["group_id"], uid) or admin))
-    reply_hint = ""
-    if t["locked"]:
-        reply_hint = "این گفتگو بسته شده است."
-    elif is_clinic and not (me_pro or admin or t["author_id"] == uid):
-        reply_hint = "در کلینیک فقط متخصصانِ تأییدشده و پرسش‌کننده پاسخ می‌دهند."
-    elif t.get("group_id") and not is_active_member(store, t["group_id"], uid) and not admin:
-        reply_hint = "برای پاسخ دادن عضوِ گروه شوید."
-    elif blocked_reply:
-        reply_hint = "امکانِ پاسخ در این گفتگو برای شما وجود ندارد."
+    can_reply, reply_hint = _reply_gate(store, t, uid, admin, pros)
     return {
         "topic": dict(_topic_card(store, t, uid, admin, pros, {"bookmarked": bookmarked}),
                       body=t["body"], editedAt=t["edited_at"], poll=_poll_view(t, uid),
@@ -3607,12 +3770,30 @@ def _topic_rate(uid):
 def _clean_poll(p):
     if not isinstance(p, dict):
         return None
-    opts = [str(_s(o))[:80] for o in (p.get("options") or []) if _s(str(o or ""))][:10]
+    raw = p.get("options")
+    if not isinstance(raw, list):
+        raw = []
+    opts = []
+    for o in raw[:20]:
+        o = _s(o)[:80]
+        if o and o not in opts:
+            opts.append(o)
+    opts = opts[:10]
     if len(opts) < 2:
         raise ApiError("نظرسنجی دست‌کم دو گزینه لازم دارد.")
-    days = int(p.get("days") or 0)
-    return {"question": _s(p.get("question"))[:200], "options": opts, "multi": bool(p.get("multi")),
+    days = _int(p.get("days"), 0)
+    return {"question": _s(p.get("question"))[:200], "options": opts, "multi": p.get("multi") is True,
             "closesAt": now_ms() + days * 86400000 if 0 < days <= 60 else None}
+
+
+def _recount_topic(tid):
+    """Recompute a topic's reply counters from its rows (after a reply is hidden/removed/restored),
+    and drop a «best answer» that is no longer published."""
+    _x("UPDATE f_topics SET "
+       "reply_count=(SELECT count(*) FROM f_posts WHERE topic_id=%s AND status='PUBLISHED'), "
+       "expert_reply_count=(SELECT count(*) FROM f_posts WHERE topic_id=%s AND status='PUBLISHED' AND is_expert), "
+       "accepted_post_id=CASE WHEN accepted_post_id IS NULL OR EXISTS (SELECT 1 FROM f_posts WHERE id=accepted_post_id "
+       "AND status='PUBLISHED') THEN accepted_post_id ELSE NULL END WHERE id=%s", (tid, tid, tid))
 
 
 def a_forumCreateTopic(store, uid, args):
@@ -3621,9 +3802,9 @@ def a_forumCreateTopic(store, uid, args):
         raise ApiError("عنوان باید بین ۴ تا ۱۴۰ نویسه باشد.")
     if not (TOPIC_BODY_MIN <= len(body) <= TOPIC_BODY_MAX):
         raise ApiError("متن را کامل‌تر بنویسید (حداکثر ۲۰ هزار نویسه).")
-    fid, gid = args.get("forumId"), args.get("groupId")
+    fid, gid = _sid(args.get("forumId")), _sid(args.get("groupId"))
     forum = None
-    if gid:
+    if args.get("groupId"):
         g = store.get("groups", gid)
         if not g or g.get("status") == "ARCHIVED":
             raise ApiError("گروه پیدا نشد.")
@@ -3634,8 +3815,6 @@ def a_forumCreateTopic(store, uid, args):
         forum = _forum(fid)
         if not forum:
             raise ApiError("یک تالار برای این گفتگو انتخاب کنید.")
-        if forum["parent_id"] is None and _q("SELECT 1 FROM f_forums WHERE parent_id=%s LIMIT 1", (fid,), one=True):
-            pass  # posting straight into a top-level forum is allowed (it collects «سایر»)
     _topic_rate(uid)
     images = _check_images(store, uid, args.get("images"))
     poll = _clean_poll(args.get("poll")) if args.get("poll") else None
@@ -3644,12 +3823,12 @@ def a_forumCreateTopic(store, uid, args):
     kind = "question" if (forum and forum["kind"] == "clinic") else ("poll" if poll else "discussion")
     _x("INSERT INTO f_topics(id,forum_id,group_id,author_id,anonymous,title,body,images,poll,kind,created_at,last_post_at,last_post_by) "
        "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-       (tid, fid, gid, uid, bool(args.get("anonymous")) and not gid, title, body, json.dumps(images),
+       (tid, fid, gid, uid, args.get("anonymous") is True and not gid, title, body, json.dumps(images),
         json.dumps(poll) if poll else None, kind, now, now, uid))
     _x("INSERT INTO f_follows(topic_id,user_id,created_at) VALUES(%s,%s,%s) ON CONFLICT DO NOTHING", (tid, uid, now))
     if gid:
         g = store.get("groups", gid)
-        for m in store.all("memberships"):
+        for m in list(store.all("memberships")):
             if m.get("groupId") == gid and m.get("status") == "ACTIVE" and m.get("userId") != uid \
                     and m.get("notify", True) and not _blocked_between(store, uid, m.get("userId")):
                 add_notification(store, m["userId"], "GROUP_REPLY", "گفتگوی تازه در «%s»" % (g.get("title") or "گروه"),
@@ -3657,31 +3836,27 @@ def a_forumCreateTopic(store, uid, args):
     return {"id": tid}
 
 
-def _post_row(pid):
-    return _q("SELECT * FROM f_posts WHERE id=%s", (pid,), one=True) if isinstance(pid, str) else None
-
-
 def a_forumReply(store, uid, args):
     admin = is_admin(store, uid)
     t = _topic_row(args.get("topicId"))
-    detail = a_forumTopic(store, uid, {"topicId": args.get("topicId"), "page": 0}) if _topic_visible(store, t, uid, admin) else None
-    if not detail:
+    if not _topic_visible(store, t, uid, admin):
         raise ApiError("این گفتگو پیدا نشد یا حذف شده است.")
-    if not detail["canReply"]:
-        raise ApiError(detail["replyHint"] or "امکانِ پاسخ در این گفتگو نیست.")
+    pros = _verified_pro_ids(store)
+    can_reply, hint = _reply_gate(store, t, uid, admin, pros)
+    if not can_reply:
+        raise ApiError(hint or "امکانِ پاسخ در این گفتگو نیست.")
     body = _s(args.get("body"))
     if not (POST_BODY_MIN <= len(body) <= POST_BODY_MAX):
         raise ApiError("متنِ پاسخ را بنویسید (حداکثر ۱۰ هزار نویسه).")
     if not RL.allow("reply:" + uid, 40, 600):
         raise ApiError(TOO_MANY)
     images = _check_images(store, uid, args.get("images"))
-    quote = args.get("quoteId")
+    quote = _sid(args.get("quoteId"))
     qrow = None
     if quote and quote != t["id"]:
         qrow = _post_row(quote)
-        if not qrow or qrow["topic_id"] != t["id"]:
+        if not qrow or qrow["topic_id"] != t["id"] or qrow["status"] != "PUBLISHED":
             quote, qrow = None, None
-    pros = _verified_pro_ids(store)
     expert = uid in pros
     pid = new_id("p")
     now = now_ms()
@@ -3691,9 +3866,10 @@ def a_forumReply(store, uid, args):
        "expert_reply_count=expert_reply_count+%s WHERE id=%s", (now, uid, 1 if expert else 0, t["id"]))
     _x("INSERT INTO f_reads(topic_id,user_id,read_at) VALUES(%s,%s,%s) ON CONFLICT(topic_id,user_id) DO UPDATE SET read_at=EXCLUDED.read_at",
        (t["id"], uid, now))
-    if args.get("follow", True):
+    if args.get("follow", True) is not False:
         _x("INSERT INTO f_follows(topic_id,user_id,created_at) VALUES(%s,%s,%s) ON CONFLICT DO NOTHING", (t["id"], uid, now))
-    me = _author(store, uid, pros)["name"]
+    # The opener of an anonymous topic is never named in what their reply sends out.
+    me = ANON_NAME if (t["anonymous"] and t["author_id"] == uid) else _author(store, uid, pros)["name"]
     notified = {uid}
     if qrow and qrow["author_id"] not in notified and not _blocked_between(store, uid, qrow["author_id"]):
         add_notification(store, qrow["author_id"], "GROUP_REPLY", "پاسخ به نوشتهٔ شما",
@@ -3708,10 +3884,13 @@ def a_forumReply(store, uid, args):
         fu = f["user_id"]
         if fu in notified or _blocked_between(store, uid, fu):
             continue
+        if t.get("group_id") and not is_active_member(store, t["group_id"], fu):
+            continue  # left the group: no more news from inside it
         add_notification(store, fu, "GROUP_REPLY", "پاسخِ تازه در گفتگویی که دنبال می‌کنید",
                          "«%s»" % t["title"][:80], related_id=t["id"])
         notified.add(fu)
-    return {"id": pid, "pages": detail["pages"] if detail["total"] % PAGE_POSTS else detail["pages"] + 1}
+    _, _, total = _visible_post_count(t, uid, admin, list(_hidden_authors(store, uid, admin)) or ["-"])
+    return {"id": pid, "pages": max(1, (total + PAGE_POSTS - 1) // PAGE_POSTS)}
 
 
 def a_forumEdit(store, uid, args):
@@ -3723,6 +3902,8 @@ def a_forumEdit(store, uid, args):
     if t:
         if t["author_id"] != uid:
             raise ApiError("فقط نویسنده می‌تواند ویرایش کند.")
+        if t["status"] == "REMOVED":
+            raise ApiError("این گفتگو حذف شده است.")
         if now - t["created_at"] > TOPIC_EDIT_WINDOW_MS and not admin:
             raise ApiError("مهلتِ ویرایش (یک هفته) گذشته است.")
         title, body = _s(args.get("title")) or t["title"], _s(args.get("body"))
@@ -3737,6 +3918,9 @@ def a_forumEdit(store, uid, args):
         raise ApiError("نوشته پیدا نشد.")
     if p["author_id"] != uid:
         raise ApiError("فقط نویسنده می‌تواند ویرایش کند.")
+    pt = _topic_row(p["topic_id"])
+    if not pt or pt["status"] == "REMOVED":
+        raise ApiError("این گفتگو حذف شده است.")
     if now - p["created_at"] > TOPIC_EDIT_WINDOW_MS and not admin:
         raise ApiError("مهلتِ ویرایش (یک هفته) گذشته است.")
     body = _s(args.get("body"))
@@ -3755,6 +3939,8 @@ def a_forumDelete(store, uid, args):
         if t["author_id"] != uid and not admin and not (t.get("group_id") and can_manage(store, t["group_id"], uid)):
             raise ApiError("اجازهٔ حذف ندارید.")
         _x("UPDATE f_topics SET status='REMOVED' WHERE id=%s", (t["id"],))
+        if t["author_id"] != uid:
+            _log_admin(store, uid, "DELETE_CONTENT", "TOPIC", t["id"], "حذف توسط ناظر")
         return
     p = _post_row(target)
     if not p:
@@ -3764,27 +3950,32 @@ def a_forumDelete(store, uid, args):
         raise ApiError("اجازهٔ حذف ندارید.")
     if p["status"] != "REMOVED":
         _x("UPDATE f_posts SET status='REMOVED' WHERE id=%s", (p["id"],))
-        _x("UPDATE f_topics SET reply_count=greatest(reply_count-1,0), expert_reply_count=greatest(expert_reply_count-%s,0) "
-           "WHERE id=%s", (1 if p["is_expert"] else 0, p["topic_id"]))
+        # recount, not decrement: a reply an admin already hid is no longer in the count
+        _recount_topic(p["topic_id"])
+        if p["author_id"] != uid:
+            _log_admin(store, uid, "DELETE_CONTENT", "POST", p["id"], "حذف توسط ناظر")
 
 
 def a_forumLike(store, uid, args):
-    target = args.get("id")
+    target = _sid(args.get("id"))
+    admin = is_admin(store, uid)
     t = _topic_row(target)
     p = None if t else _post_row(target)
     owner_topic = t or (_topic_row(p["topic_id"]) if p else None)
-    if not owner_topic or not _topic_visible(store, owner_topic, uid, is_admin(store, uid)):
+    if not owner_topic or not _topic_visible(store, owner_topic, uid, admin) or owner_topic["status"] != "PUBLISHED" \
+            or (p and p["status"] != "PUBLISHED"):
         raise ApiError("نوشته پیدا نشد.")
     author = (t or p)["author_id"]
     if author == uid:
         raise ApiError("نوشتهٔ خودتان را نمی‌توانید بپسندید.")
+    if not admin and author in _hidden_authors(store, uid, admin):
+        raise ApiError("نوشته پیدا نشد.")
     table = "f_topics" if t else "f_posts"
-    if _q("SELECT 1 FROM f_likes WHERE target_id=%s AND user_id=%s", (target, uid), one=True):
-        _x("DELETE FROM f_likes WHERE target_id=%s AND user_id=%s", (target, uid))
+    if _x("DELETE FROM f_likes WHERE target_id=%s AND user_id=%s", (target, uid)):
         _x("UPDATE %s SET like_count=greatest(like_count-1,0) WHERE id=%%s" % table, (target,))
         liked = False
     else:
-        _x("INSERT INTO f_likes(target_id,user_id,created_at) VALUES(%s,%s,%s)", (target, uid, now_ms()))
+        _x("INSERT INTO f_likes(target_id,user_id,created_at) VALUES(%s,%s,%s) ON CONFLICT DO NOTHING", (target, uid, now_ms()))
         _x("UPDATE %s SET like_count=like_count+1 WHERE id=%%s" % table, (target,))
         liked = True
     n = _q("SELECT like_count FROM %s WHERE id=%%s" % table, (target,), one=True)["like_count"]
@@ -3797,7 +3988,7 @@ def a_forumBookmark(store, uid, args):
         raise ApiError("گفتگو پیدا نشد.")
     if _x("DELETE FROM f_bookmarks WHERE topic_id=%s AND user_id=%s", (t["id"], uid)):
         return {"bookmarked": False}
-    _x("INSERT INTO f_bookmarks(topic_id,user_id,created_at) VALUES(%s,%s,%s)", (t["id"], uid, now_ms()))
+    _x("INSERT INTO f_bookmarks(topic_id,user_id,created_at) VALUES(%s,%s,%s) ON CONFLICT DO NOTHING", (t["id"], uid, now_ms()))
     return {"bookmarked": True}
 
 
@@ -3807,19 +3998,25 @@ def a_forumFollow(store, uid, args):
         raise ApiError("گفتگو پیدا نشد.")
     if _x("DELETE FROM f_follows WHERE topic_id=%s AND user_id=%s", (t["id"], uid)):
         return {"followed": False}
-    _x("INSERT INTO f_follows(topic_id,user_id,created_at) VALUES(%s,%s,%s)", (t["id"], uid, now_ms()))
+    _x("INSERT INTO f_follows(topic_id,user_id,created_at) VALUES(%s,%s,%s) ON CONFLICT DO NOTHING", (t["id"], uid, now_ms()))
     return {"followed": True}
 
 
 def a_forumVote(store, uid, args):
     t = _topic_row(args.get("topicId"))
-    if not _topic_visible(store, t, uid, is_admin(store, uid)) or not t.get("poll"):
+    if not _topic_visible(store, t, uid, is_admin(store, uid)) or not t.get("poll") or t["status"] != "PUBLISHED":
         raise ApiError("نظرسنجی پیدا نشد.")
     poll = t["poll"]
-    if poll.get("closesAt") and now_ms() > int(poll["closesAt"]):
+    if t["locked"] or (poll.get("closesAt") and now_ms() > int(poll["closesAt"])):
         raise ApiError("مهلتِ این نظرسنجی تمام شده است.")
     n = len(poll.get("options") or [])
-    opts = sorted({int(o) for o in (args.get("options") or []) if str(o).lstrip("-").isdigit() and 0 <= int(o) < n})
+    raw = args.get("options")
+    if not isinstance(raw, list) or len(raw) > 20:
+        raise ApiError("یک گزینه انتخاب کنید.")
+    picked = [_int(o, -1) if isinstance(o, (int, str)) else -1 for o in raw]
+    if any(not 0 <= o < n for o in picked):
+        raise ApiError("گزینهٔ انتخاب‌شده معتبر نیست.")
+    opts = sorted(set(picked))
     if not opts or (len(opts) > 1 and not poll.get("multi")):
         raise ApiError("یک گزینه انتخاب کنید.")
     _x("DELETE FROM f_votes WHERE topic_id=%s AND user_id=%s", (t["id"], uid))
@@ -3832,7 +4029,7 @@ def a_forumModerate(store, uid, args):
     """pin / unpin / lock / unlock / move (admin), accept (topic author in the clinic)."""
     admin = is_admin(store, uid)
     t = _topic_row(args.get("topicId"))
-    if not t:
+    if not t or t["status"] == "REMOVED" or not _topic_visible(store, t, uid, admin):
         raise ApiError("گفتگو پیدا نشد.")
     op = args.get("op")
     group_mod = bool(t.get("group_id")) and can_manage(store, t["group_id"], uid)
@@ -3842,6 +4039,8 @@ def a_forumModerate(store, uid, args):
             raise ApiError("فقط پرسش‌کننده بهترین پاسخ را انتخاب می‌کند.")
         if not p or p["topic_id"] != t["id"] or p["status"] != "PUBLISHED":
             raise ApiError("پاسخ پیدا نشد.")
+        if p["author_id"] == t["author_id"]:
+            raise ApiError("پاسخِ خودتان را نمی‌توانید بهترین پاسخ کنید.")
         new = None if t.get("accepted_post_id") == p["id"] else p["id"]
         _x("UPDATE f_topics SET accepted_post_id=%s WHERE id=%s", (new, t["id"]))
         if new and p["author_id"] != uid:
@@ -3909,7 +4108,7 @@ def a_learnList(store, uid, args):
         params.append(uid)
     else:
         where.append("status='PUBLISHED'")
-    if args.get("categoryId"):
+    if _sid(args.get("categoryId")):
         where.append("category_id=%s")
         params.append(args.get("categoryId"))
     if args.get("kind") in LEARN_KINDS:
@@ -3921,19 +4120,19 @@ def a_learnList(store, uid, args):
     q = _s(args.get("q"))[:80]
     if q:
         where.append("(title ILIKE %s OR summary ILIKE %s OR body ILIKE %s)")
-        params += ["%" + q + "%"] * 3
-    page = max(0, min(int(args.get("page") or 0), 400))
-    size = max(5, min(int(args.get("size") or 20), 50))
+        params += ["%" + re.sub(r"([%_\\])", r"\\\1", q) + "%"] * 3
+    page = _int(args.get("page"), 0, 0, 400)
+    size = _int(args.get("size"), 20, 5, 50)
     order = "created_at" if args.get("review") or args.get("mine") else "featured DESC, published_at"
-    rows = _q("SELECT * FROM l_items WHERE %s ORDER BY %s DESC LIMIT %d OFFSET %d"
+    rows = _q("SELECT * FROM l_items WHERE %s ORDER BY %s DESC, id LIMIT %d OFFSET %d"
               % (" AND ".join(where), order, size + 1, page * size), tuple(params))
     return {"items": _learn_cards(store, uid, rows[:size]), "hasMore": len(rows) > size, "page": page}
 
 
 def a_learnGet(store, uid, args):
     admin = is_admin(store, uid)
-    r = _q("SELECT * FROM l_items WHERE id=%s", (args.get("id"),), one=True) if isinstance(args.get("id"), str) else None
-    if not r or (r["status"] != "PUBLISHED" and not admin and r["author_id"] != uid):
+    r = _q("SELECT * FROM l_items WHERE id=%s", (args.get("id"),), one=True) if _sid(args.get("id")) else None
+    if not r or r["status"] == "REMOVED" and not admin or (r["status"] != "PUBLISHED" and not admin and r["author_id"] != uid):
         raise ApiError("این مطلب پیدا نشد.")
     if r["status"] == "PUBLISHED" and RL.allow("lview:%s:%s" % (uid, r["id"]), 1, 3600):
         _x("UPDATE l_items SET view_count=view_count+1 WHERE id=%s", (r["id"],))
@@ -3953,17 +4152,30 @@ def a_learnSubmit(store, uid, args):
     title, summary, body = _s(args.get("title")), _s(args.get("summary"))[:600], _s(args.get("body"))[:40000]
     if not (4 <= len(title) <= 140):
         raise ApiError("عنوان باید بین ۴ تا ۱۴۰ نویسه باشد.")
-    cat = args.get("categoryId")
-    if not _q("SELECT 1 FROM l_categories WHERE id=%s AND NOT archived", (cat,), one=True):
+    cat = _sid(args.get("categoryId"))
+    if not cat or not _q("SELECT 1 FROM l_categories WHERE id=%s AND NOT archived", (cat,), one=True):
         raise ApiError("یک دسته‌بندی انتخاب کنید.")
-    cover = (_check_images(store, uid, [args.get("coverId")]) or [None])[0] if args.get("coverId") else None
+    iid = args.get("id")
+    if iid is not None and not _sid(iid):
+        raise ApiError("مطلب پیدا نشد.")
+    r = _q("SELECT * FROM l_items WHERE id=%s", (iid,), one=True) if iid else None
+    if iid and (not r or (r["author_id"] != uid and not admin)):
+        raise ApiError("مطلب پیدا نشد.")
+    cover = None
+    if args.get("coverId"):
+        m = re.search(r"([0-9a-f]{32})", _s(args.get("coverId")))
+        if m and r and m.group(1) == r["cover_id"]:
+            cover = r["cover_id"]  # keeping the current cover (an admin editing someone's item doesn't own it)
+        else:
+            cover = (_check_images(store, uid, [args.get("coverId")]) or [None])[0]
     video_id, video_url = None, None
     if kind == "video":
-        vid = re.search(r"([0-9a-f]{32})", str(args.get("videoId") or ""))
+        vid = re.search(r"([0-9a-f]{32})", _s(args.get("videoId")))
         url = _s(args.get("videoUrl"))
         if vid:
             doc = store.get("files", vid.group(1))
-            if not doc or (doc.get("ownerId") != uid and not admin) or not str(doc.get("mime", "")).startswith("video/"):
+            keep = bool(r and r["video_id"] == vid.group(1))
+            if not doc or (doc.get("ownerId") != uid and not admin and not keep) or not str(doc.get("mime", "")).startswith("video/"):
                 raise ApiError("فایلِ ویدیو معتبر نیست.")
             video_id = vid.group(1)
         elif url:
@@ -3976,15 +4188,11 @@ def a_learnSubmit(store, uid, args):
         raise ApiError("متنِ مطلب دست‌کم ۵۰ نویسه باشد.")
     now = now_ms()
     status = "PUBLISHED" if admin else "PENDING"
-    iid = args.get("id")
     if iid:
-        r = _q("SELECT * FROM l_items WHERE id=%s", (iid,), one=True)
-        if not r or (r["author_id"] != uid and not admin):
-            raise ApiError("مطلب پیدا نشد.")
         if not admin and r["status"] not in ("PENDING", "REJECTED"):
             raise ApiError("مطلبِ منتشرشده را فقط مدیر ویرایش می‌کند.")
-        if admin and r["status"] in ("PUBLISHED", "HIDDEN"):
-            status = r["status"]
+        if admin and r["status"] in ("PUBLISHED", "HIDDEN", "REMOVED"):
+            status = r["status"]  # an admin's edit never resurrects or re-publishes an item by itself
         _x("UPDATE l_items SET kind=%s, category_id=%s, title=%s, summary=%s, body=%s, cover_id=%s, video_id=%s, "
            "video_url=%s, status=%s, review_note=NULL, updated_at=%s, published_at=COALESCE(published_at, %s) WHERE id=%s",
            (kind, cat, title, summary, body, cover, video_id, video_url, status, now,
@@ -4008,7 +4216,7 @@ def a_learnSubmit(store, uid, args):
 def a_learnReview(store, uid, args):
     if not is_admin(store, uid):
         raise ApiError("دسترسیِ مدیر لازم است.")
-    r = _q("SELECT * FROM l_items WHERE id=%s", (args.get("id"),), one=True)
+    r = _q("SELECT * FROM l_items WHERE id=%s", (args.get("id"),), one=True) if _sid(args.get("id")) else None
     if not r:
         raise ApiError("مطلب پیدا نشد.")
     op = args.get("op")
@@ -4040,14 +4248,15 @@ def a_learnReview(store, uid, args):
 
 
 def a_learnDelete(store, uid, args):
-    r = _q("SELECT * FROM l_items WHERE id=%s", (args.get("id"),), one=True)
+    r = _q("SELECT * FROM l_items WHERE id=%s", (args.get("id"),), one=True) if _sid(args.get("id")) else None
     if not r or (r["author_id"] != uid and not is_admin(store, uid)):
         raise ApiError("مطلب پیدا نشد.")
     _x("UPDATE l_items SET status='REMOVED' WHERE id=%s", (r["id"],))
 
 
 def a_learnSave(store, uid, args):
-    r = _q("SELECT id FROM l_items WHERE id=%s AND status='PUBLISHED'", (args.get("id"),), one=True)
+    r = _q("SELECT id FROM l_items WHERE id=%s AND status='PUBLISHED'", (args.get("id"),), one=True) \
+        if _sid(args.get("id")) else None
     if not r:
         raise ApiError("مطلب پیدا نشد.")
     if _x("DELETE FROM l_saved WHERE item_id=%s AND user_id=%s", (r["id"], uid)):
@@ -4063,10 +4272,13 @@ def a_learnCategorySave(store, uid, args):
     if not (2 <= len(title) <= 60):
         raise ApiError("نامِ دسته را بنویسید.")
     cid = args.get("id") or new_id("lc")
+    if not _sid(cid, 40) or not re.fullmatch(r"[A-Za-z0-9_\-]+", cid):
+        raise ApiError("شناسهٔ دسته نامعتبر است.")
     _x("INSERT INTO l_categories(id,title,icon,color,sort,archived) VALUES(%s,%s,%s,%s,%s,%s) "
        "ON CONFLICT(id) DO UPDATE SET title=EXCLUDED.title, icon=EXCLUDED.icon, color=EXCLUDED.color, "
        "sort=EXCLUDED.sort, archived=EXCLUDED.archived",
-       (cid, title, _s(args.get("icon"))[:30], _s(args.get("color"))[:9], int(args.get("sort") or 100), bool(args.get("archived"))))
+       (cid, title, _s(args.get("icon"))[:30], _s(args.get("color"))[:9], _int(args.get("sort"), 100, -100000, 100000),
+        args.get("archived") is True))
     return {"id": cid}
 
 
@@ -4087,6 +4299,8 @@ def a_reviewList(store, uid, args):
     ttype, tid = args.get("targetType"), args.get("targetId")
     if ttype not in REVIEW_TARGETS:
         raise ApiError("نوعِ نظر نامعتبر است.")
+    if not _sid(tid):
+        raise ApiError("موردِ نظر پیدا نشد.")
     hidden = list(_hidden_authors(store, uid, is_admin(store, uid))) or ["-"]
     rows = _q("SELECT * FROM r_reviews WHERE target_type=%s AND target_id=%s AND status='PUBLISHED' "
               "AND NOT (user_id = ANY(%s)) ORDER BY updated_at DESC LIMIT 100", (ttype, tid, hidden))
@@ -4104,6 +4318,8 @@ def a_reviewSave(store, uid, args):
         raise ApiError("موردِ نظر پیدا نشد.")
     if ttype == "pro" and tid == uid:
         raise ApiError("برای خودتان نمی‌توانید نظر ثبت کنید.")
+    if ttype == "pro" and _blocked_between(store, uid, tid):
+        raise ApiError("امکانِ ثبتِ نظر برای این متخصص وجود ندارد.")
     try:
         rating = int(args.get("rating"))
     except (TypeError, ValueError):
@@ -4121,14 +4337,17 @@ def a_reviewSave(store, uid, args):
 
 def a_reviewDelete(store, uid, args):
     ttype, tid = args.get("targetType"), args.get("targetId")
-    who = args.get("userId") if is_admin(store, uid) and args.get("userId") else uid
+    if ttype not in REVIEW_TARGETS or not _sid(tid):
+        raise ApiError("موردِ نظر پیدا نشد.")
+    who = args.get("userId") if is_admin(store, uid) and _sid(args.get("userId")) else uid
     _x("DELETE FROM r_reviews WHERE target_type=%s AND target_id=%s AND user_id=%s", (ttype, tid, who))
 
 
 def a_reviewSummary(store, uid, args):
     """Average rating + count per target id, for list screens."""
     ttype = args.get("targetType")
-    ids = [str(i) for i in (args.get("ids") or [])][:200]
+    raw = args.get("ids")
+    ids = [i for i in raw[:200] if _sid(i)] if isinstance(raw, list) else []
     if ttype not in REVIEW_TARGETS or not ids:
         return {"summary": {}}
     rows = _q("SELECT target_id, count(*) AS n, avg(rating) AS avg FROM r_reviews WHERE target_type=%s AND "
@@ -4171,15 +4390,16 @@ def a_groupDirectory(store, uid, args):
 def a_groupInfo(store, uid, args):
     admin = is_admin(store, uid)
     g = store.get("groups", args.get("groupId"))
-    if not g or (g.get("status") == "ARCHIVED" and not admin):
+    if not g or (g.get("status") == "ARCHIVED" and not admin and g.get("ownerId") != uid):
         raise ApiError("گروه پیدا نشد.")
     m = next((x for x in store.all("memberships") if x.get("groupId") == g["id"] and x.get("userId") == uid), None)
     manager = admin or can_manage(store, g["id"], uid)
     members, requests = [], []
     if manager or (g.get("visibility") == "PUBLIC") or (m and m.get("status") == "ACTIVE"):
         pros = _verified_pro_ids(store)
+        hidden = _hidden_authors(store, uid, admin)
         for x in store.all("memberships"):
-            if x.get("groupId") != g["id"]:
+            if x.get("groupId") != g["id"] or x.get("userId") in hidden:
                 continue
             card = dict(_author(store, x["userId"], pros), role=x.get("role"), status=x.get("status"), since=x.get("createdAt"))
             if x.get("status") == "ACTIVE":
@@ -4199,26 +4419,56 @@ def a_groupInfo(store, uid, args):
 
 def a_groupUpdate(store, uid, args):
     g = store.get("groups", args.get("groupId"))
-    if not g or not (is_admin(store, uid) or g.get("ownerId") == uid or can_manage(store, g["id"], uid)):
+    admin = is_admin(store, uid)
+    if not g or not (admin or g.get("ownerId") == uid or can_manage(store, g["id"], uid)):
         raise ApiError("اجازهٔ ویرایشِ گروه را ندارید.")
-    title = _s(args.get("title")) or g.get("title")
+    if g.get("status") == "ARCHIVED" and not admin:
+        raise ApiError("این گروه بسته شده است.")
+    title = _s(args.get("title")) or g.get("title") or ""
     if len(title) < 3:
         raise ApiError("عنوانِ گروه را کامل‌تر بنویسید.")
-    g.update({"title": title[:80], "description": _s(args.get("description"))[:1000],
-              "rules": _s(args.get("rules"))[:2000] or None, "city": _s(args.get("city"))[:40] or None,
-              "category": _s(args.get("category"))[:40] or None, "ageBand": _s(args.get("ageBand"))[:20] or None,
-              "updatedAt": now_ms()})
-    if args.get("visibility") in ("PUBLIC", "PRIVATE"):
-        g["visibility"] = args.get("visibility")
-    if "coverId" in args:
-        g["coverId"] = (_check_images(store, uid, [args.get("coverId")]) or [None])[0] if args.get("coverId") else None
+    vis = args.get("visibility")
+    if vis in ("PUBLIC", "PRIVATE") and vis != g.get("visibility") and not (admin or g.get("ownerId") == uid):
+        # opening a private group would publish its members' conversations: the owner's call
+        raise ApiError("فقط سازندهٔ گروه نوعِ گروه (عمومی/خصوصی) را تغییر می‌دهد.")
+    if "coverId" in args:  # validated before anything changes; a moderator may keep the owner's cover
+        cov = _s(args.get("coverId"))
+        if not cov:
+            g["coverId"] = None
+        elif cov != g.get("coverId"):
+            g["coverId"] = (_check_images(store, uid, [cov]) or [None])[0]
+    g["title"] = title[:80]
+    if "description" in args:
+        g["description"] = _s(args.get("description"))[:1000]
+    for key, limit in (("rules", 2000), ("city", 40), ("category", 40), ("ageBand", 20)):
+        if key in args:  # absent keys keep their value; an empty string clears it
+            g[key] = _s(args.get(key))[:limit] or None
+    g["updatedAt"] = now_ms()
+    opened = vis == "PUBLIC" and g.get("visibility") == "PRIVATE"
+    if vis in ("PUBLIC", "PRIVATE"):
+        g["visibility"] = vis
+    if opened:  # a public group has no waiting room: pending requests become members
+        for m in list(store.all("memberships")):
+            if m.get("groupId") == g["id"] and m.get("status") == "REQUESTED":
+                m.update(status="ACTIVE", updatedAt=now_ms())
+                store.put("memberships", m)
+                g["memberCount"] = int(g.get("memberCount", 0)) + 1
+                add_notification(store, m["userId"], "GROUP_JOIN_REQUEST", "عضویت پذیرفته شد",
+                                 "درخواست عضویت شما در گروه «%s» پذیرفته شد." % g["title"], g["id"])
     store.put("groups", g)
 
 
 def a_groupArchive(store, uid, args):
     g = store.get("groups", args.get("groupId"))
-    if not g or not (is_admin(store, uid) or g.get("ownerId") == uid):
+    admin = is_admin(store, uid)
+    if not g or not (admin or g.get("ownerId") == uid):
         raise ApiError("فقط سازندهٔ گروه یا مدیرِ سامانه گروه را می‌بندد.")
+    if args.get("restore") and g.get("archivedByAdmin") and not admin:
+        raise ApiError("این گروه توسط مدیریت بسته شده و فقط مدیریت آن را باز می‌کند.")
+    if args.get("restore"):
+        g.pop("archivedByAdmin", None)
+    elif admin and g.get("ownerId") != uid:
+        g["archivedByAdmin"] = True
     g["status"] = "ARCHIVED" if not args.get("restore") else "ACTIVE"
     g["updatedAt"] = now_ms()
     store.put("groups", g)
@@ -4234,6 +4484,9 @@ def a_groupSetRole(store, uid, args):
                    and m.get("userId") == args.get("userId") and m.get("status") == "ACTIVE"), None)
     if not target or role not in ("MODERATOR", "MEMBER", "OWNER"):
         raise ApiError("عضو پیدا نشد.")
+    if target.get("role") == "OWNER" or target["userId"] == g.get("ownerId"):
+        # the owner's own role only changes by handing ownership to someone else
+        raise ApiError("نقشِ سازنده فقط با واگذاریِ گروه به عضوی دیگر عوض می‌شود.")
     if role == "OWNER":
         for m in store.all("memberships"):
             if m.get("groupId") == g["id"] and m.get("role") == "OWNER":
@@ -4271,16 +4524,22 @@ def a_userProfile(store, uid, args):
     admin = is_admin(store, uid)
     tid = args.get("userId")
     u = store.get("users", tid) if isinstance(tid, str) else None
-    if not u or (tid in _hidden_authors(store, uid, admin) and tid != uid):
+    blocked_me = not admin and tid != uid and uid in ((u or {}).get("blockedUserIds") or [])
+    if not u or u.get("status") == "DELETED" or blocked_me:
         raise ApiError("کاربر پیدا نشد.")
     priv = u.get("privacy") or {}
     pros = _verified_pro_ids(store)
-    pr = next((p for p in store.all("professionals") if p.get("userId") == tid), None)
+    pr = _pros_by_user(store).get(tid)
     if pr and pr.get("verificationStatus") != "VERIFIED" and not admin and tid != uid:
         pr = None
+    if pr and not (admin or tid == uid or priv.get("showCity", False)):
+        pr = dict(pr, city=None)  # same privacy switch as the snapshot's professionals list
+    # replies inside one's own anonymous topics are not counted: the numbers must not unmask them
+    own_reply = ("FROM f_posts p WHERE p.author_id=%s AND p.status='PUBLISHED' AND NOT EXISTS (SELECT 1 FROM f_topics t "
+                 "WHERE t.id=p.topic_id AND t.anonymous AND t.author_id=p.author_id)")
     stats = _q("SELECT (SELECT count(*) FROM f_topics WHERE author_id=%s AND status='PUBLISHED' AND NOT anonymous) AS topics, "
-               "(SELECT count(*) FROM f_posts WHERE author_id=%s AND status='PUBLISHED') AS replies, "
-               "(SELECT coalesce(sum(like_count),0) FROM f_posts WHERE author_id=%s AND status='PUBLISHED') AS likes",
+               "(SELECT count(*) " + own_reply + ") AS replies, "
+               "(SELECT coalesce(sum(p.like_count),0) " + own_reply + ") AS likes",
                (tid, tid, tid), one=True)
     me = store.get("users", uid) or {}
     return {"user": dict(_author(store, tid, pros), accountType=u.get("accountType"),
@@ -4288,7 +4547,8 @@ def a_userProfile(store, uid, args):
                          bio=u.get("bio") if (priv.get("showBio", True) or admin or tid == uid) else None,
                          joinedAt=u.get("joinedAt")),
             "professional": pr, "stats": {k: int(v) for k, v in stats.items()},
-            "canMessage": tid != uid and priv.get("allowMessageRequests", True) is not False,
+            "canMessage": tid != uid and priv.get("allowMessageRequests", True) is not False
+                          and not _blocked_between(store, uid, tid),
             "blockedByMe": tid in (me.get("blockedUserIds") or [])}
 
 
@@ -4680,6 +4940,9 @@ def clean_tts_text(text):
 
 
 GENERIC_ERROR = "خطای داخلی سرور. کمی بعد دوباره تلاش کنید."
+BAD_INPUT_MSG = "درخواست نامعتبر است؛ برنامه را به‌روز کنید یا دوباره تلاش کنید."
+BAD_INPUT = (TypeError, ValueError, AttributeError, KeyError, IndexError,
+             psycopg2.DataError, psycopg2.ProgrammingError)
 MAX_BODY = 1024 * 1024
 READ_ONLY_ACTIONS = {"recList", "donationList", "donationGet", "search", "shareList", "shareView",
                      "adminStats", "adminListUsers", "state", "exportMyData", "fileUrls",
@@ -4800,7 +5063,7 @@ class Handler(BaseHTTPRequestHandler):
         uid = self._uid()
         if uid:
             u = store.get("users", uid) or {}
-            if u.get("isAdmin") or doc.get("ownerId") == uid or _community_file(fid) \
+            if u.get("isAdmin") or doc.get("ownerId") == uid or _community_file(fid, store, uid) \
                     or fid in _readable_file_ids(store, uid):
                 return True
         if "sig" in query or "exp" in query:
@@ -4990,15 +5253,21 @@ class Handler(BaseHTTPRequestHandler):
             gate = module_of(name, a)
             if gate and gate in blocked_modules(Store(), uid):
                 return self._send(200, {"ok": False, "error": "این بخش برای شما فعال نیست."})
-            if name in READ_ONLY_ACTIONS:
-                store = Store()
-                _require_active(store, uid, name)
-                data = fn(store, uid, a)
-            else:
-                with MUT_LOCK:  # one writer at a time; a fresh Store inside the lock avoids stale reads
+            try:
+                if name in READ_ONLY_ACTIONS:
                     store = Store()
                     _require_active(store, uid, name)
                     data = fn(store, uid, a)
+                else:
+                    with MUT_LOCK:  # one writer at a time; a fresh Store inside the lock avoids stale reads
+                        store = Store()
+                        _require_active(store, uid, name)
+                        data = fn(store, uid, a)
+            except BAD_INPUT:
+                # A malformed argument that slipped past validation (wrong JSON type, unadaptable SQL
+                # value) is the client's fault: a Persian error, not a 500. Logged so it gets fixed.
+                log("bad input in action %s:\n%s" % (name, traceback.format_exc(limit=4)))
+                return self._send(200, {"ok": False, "error": BAD_INPUT_MSG})
             resp = {"ok": True}
             if data:
                 resp["data"] = data
