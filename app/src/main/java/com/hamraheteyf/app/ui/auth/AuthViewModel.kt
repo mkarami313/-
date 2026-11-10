@@ -59,6 +59,18 @@ class AuthViewModel(
         }
     }
 
+    /** «شروع بدونِ ثبت‌نام»: حسابِ همین دستگاه (اگر قبلاً ساخته شده، همان برمی‌گردد). */
+    fun startWithDevice(device: String, displayName: String) {
+        if (_state.value.loading) return
+        _state.value = AuthUiState(loading = true)
+        viewModelScope.launch(kotlinx.coroutines.NonCancellable) {
+            _state.value = when (val r = auth.deviceLogin(device, displayName.trim())) {
+                is DataResult.Success -> AuthUiState()
+                is DataResult.Error -> AuthUiState(error = r.message)
+            }
+        }
+    }
+
     fun register(
         displayName: String,
         email: String,

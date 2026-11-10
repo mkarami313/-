@@ -88,7 +88,50 @@ fun LoginScreen(onGoToRegister: () -> Unit, onGoToReset: (String) -> Unit = {}, 
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(28.dp))
-        Text("ورود به حساب", style = MaterialTheme.typography.titleMedium, modifier = Modifier.fillMaxWidth())
+
+        // ورود بدونِ ایمیل و رمز: حساب به همین گوشی بسته است و با نصبِ دوباره هم برمی‌گردد.
+        var nick by rememberSaveable { mutableStateOf("") }
+        var showEmail by rememberSaveable { mutableStateOf(hasSaved) }
+        val ctx = androidx.compose.ui.platform.LocalContext.current
+        Text("همین حالا شروع کنید", style = MaterialTheme.typography.titleMedium, modifier = Modifier.fillMaxWidth())
+        Text(
+            "ثبت‌نام، ایمیل و رمز لازم نیست. حسابتان به همین گوشی بسته است.",
+            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+        )
+        Spacer(Modifier.height(12.dp))
+        OutlinedTextField(
+            value = nick, onValueChange = { nick = it.take(60) }, label = { Text("نام یا لقب (اختیاری)") },
+            singleLine = true, modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(12.dp))
+        BigPrimaryButton(
+            text = if (state.loading && !showEmail) "در حال آماده‌سازی…" else "شروع کنید",
+            onClick = {
+                val id = android.provider.Settings.Secure.getString(ctx.contentResolver, android.provider.Settings.Secure.ANDROID_ID)
+                vm.startWithDevice(id.orEmpty(), nick)
+            },
+            enabled = !state.loading,
+        )
+        Text(
+            "با شروع، قوانین و حریمِ خصوصیِ «همراهِ طیف» را می‌پذیرید.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        )
+        if (!showEmail) {
+            state.error?.let {
+                Spacer(Modifier.height(8.dp))
+                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+            }
+            Spacer(Modifier.height(16.dp))
+            TextButton(onClick = { showEmail = true; vm.clearMessages() }) { Text("حسابِ ایمیلی دارید؟ وارد شوید") }
+            if (onEmergencyCard != null) TextButton(onClick = onEmergencyCard) { Text("کارت اضطراری") }
+            com.hamraheteyf.app.di.DemoLoginHint()
+            return@Column
+        }
+
+        Spacer(Modifier.height(28.dp))
+        Text("ورود با ایمیل", style = MaterialTheme.typography.titleMedium, modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(12.dp))
 
         OutlinedTextField(

@@ -12,6 +12,7 @@ actually enforced rather than merely mirrored on the client.
 Protocol (all JSON):
   POST /api/auth/register  {displayName,email,password,accountType,acceptedTerms} -> {token,user}
   POST /api/auth/login     {email,password}                                        -> {token,user}
+  POST /api/auth/device    {device,displayName?,acceptedTerms}                     -> {token,user,created}
   POST /api/auth/forgot    {email}                  -> {ok:true} always; emails an 8-digit code if SMTP is set
   POST /api/auth/reset     {email,code,newPassword} -> {ok:true} | {ok:false,error}
   POST /api/tts            {text} (Bearer)          -> audio bytes   (GET ?text= kept for old clients)
@@ -3383,59 +3384,24 @@ CREATE INDEX IF NOT EXISTS l_items_video_idx ON l_items(video_id);
 
 # Forum tree, seeded once (ids are stable so later seeds can add without duplicating).
 # kind: forum | clinic (only verified professionals answer; everyone may ask)
+# ۱.۴: هشت تالارِ اصلی به‌جای ۴۵ تالارِ خالی. زیرتالارهای قدیمی در پایگاه‌داده بایگانی می‌شوند (_forums_v3)، حذف نه.
 FORUM_SEED = [
-    ("diag", None, "شک و تشخیص", "از اولین نشانه‌ها تا گرفتنِ تشخیص", "search", "#0E6E62", 10, "forum"),
-    ("diag_signs", "diag", "نشانه‌های اولیه", "رفتارهایی که نگرانتان کرده", "", "", 1, "forum"),
-    ("diag_eval", "diag", "ارزیابی و تست‌ها", "ارزیابی، پزشک، مراکزِ تشخیص", "", "", 2, "forum"),
-    ("diag_new", "diag", "تازه تشخیص گرفته‌ایم", "قدم‌های اول بعد از تشخیص", "", "", 3, "forum"),
-    ("therapy", None, "درمان و توان‌بخشی", "تجربهٔ درمان‌ها از زبانِ خانواده‌ها", "healing", "#3B5BDB", 20, "forum"),
-    ("therapy_speech", "therapy", "گفتاردرمانی", "", "", "", 1, "forum"),
-    ("therapy_ot", "therapy", "کاردرمانی و یکپارچگی حسی", "", "", "", 2, "forum"),
-    ("therapy_aba", "therapy", "رفتاردرمانی (ABA)", "", "", "", 3, "forum"),
-    ("therapy_med", "therapy", "دارو و پزشکی", "تجربه‌ها؛ نسخه فقط با پزشک", "", "", 4, "forum"),
-    ("therapy_food", "therapy", "تغذیه و رژیم", "", "", "", 5, "forum"),
-    ("daily", None, "زندگیِ روزمره", "خواب، غذا، دستشویی و رفتار", "home", "#E8794A", 30, "forum"),
-    ("daily_sleep", "daily", "خواب", "", "", "", 1, "forum"),
-    ("daily_eat", "daily", "غذا خوردن", "", "", "", 2, "forum"),
-    ("daily_toilet", "daily", "دستشویی رفتن", "", "", "", 3, "forum"),
-    ("daily_behavior", "daily", "رفتارهای چالشی و بحران", "", "", "", 4, "forum"),
-    ("daily_social", "daily", "مهارت اجتماعی و بازی", "", "", "", 5, "forum"),
-    ("school", None, "آموزش و مدرسه", "مهد، مدرسه و حقوقِ آموزشی", "school", "#7048E8", 40, "forum"),
-    ("school_pre", "school", "مهدکودک و پیش‌دبستانی", "", "", "", 1, "forum"),
-    ("school_choice", "school", "مدرسهٔ عادی یا استثنایی", "", "", "", 2, "forum"),
-    ("school_rights", "school", "حقوق آموزشی و پرونده", "", "", "", 3, "forum"),
-    ("ages", None, "سنینِ مختلف", "هم‌سن‌ها را پیدا کنید", "cake", "#F08C00", 50, "forum"),
-    ("ages_0_3", "ages", "زیرِ ۳ سال", "", "", "", 1, "forum"),
-    ("ages_3_6", "ages", "۳ تا ۶ سال", "", "", "", 2, "forum"),
-    ("ages_school", "ages", "سنِ مدرسه", "", "", "", 3, "forum"),
-    ("ages_teen", "ages", "نوجوانی", "", "", "", 4, "forum"),
-    ("ages_adult", "ages", "بزرگسالی", "", "", "", 5, "forum"),
-    ("family", None, "خانواده و مراقب", "از خودتان هم مراقبت کنید", "family", "#D6336C", 60, "forum"),
-    ("family_care", "family", "خستگی و سلامتِ روانِ مراقب", "", "", "", 1, "forum"),
-    ("family_siblings", "family", "خواهر و برادرها", "", "", "", 2, "forum"),
-    ("family_couple", "family", "رابطهٔ زوجین", "", "", "", 3, "forum"),
-    ("family_dads", "family", "پدرها", "", "", "", 4, "forum"),
-    ("rights", None, "حقوق و خدمات", "بهزیستی، بیمه و مراکز", "gavel", "#2B8A3E", 70, "forum"),
-    ("rights_welfare", "rights", "بهزیستی و حمایت‌ها", "", "", "", 1, "forum"),
-    ("rights_cost", "rights", "بیمه و هزینه‌ها", "", "", "", 2, "forum"),
-    ("rights_centers", "rights", "معرفیِ مراکز و تجربه‌ها", "", "", "", 3, "forum"),
-    ("heart", None, "درد دل و دلگرمی", "موفقیت‌های کوچک و حرف‌های دل", "favorite", "#C2255C", 80, "forum"),
-    ("heart_wins", "heart", "موفقیت‌های کوچک", "", "", "", 1, "forum"),
-    ("heart_talk", "heart", "فقط می‌خواهم حرف بزنم", "", "", "", 2, "forum"),
-    ("clinic", None, "کلینیک: پرسش از متخصص", "پاسخِ متخصصانِ تأییدشده", "medical", "#1971C2", 5, "clinic"),
-    ("clinic_speech", "clinic", "گفتاردرمانی", "", "", "", 1, "clinic"),
-    ("clinic_ot", "clinic", "کاردرمانی", "", "", "", 2, "clinic"),
-    ("clinic_psy", "clinic", "روان‌شناسی و رفتار", "", "", "", 3, "clinic"),
-    ("clinic_psychiatry", "clinic", "روان‌پزشکیِ کودک", "", "", "", 4, "clinic"),
-    ("clinic_edu", "clinic", "آموزشِ ویژه", "", "", "", 5, "clinic"),
-    ("chat", None, "گپِ آزاد و معرفی", "خودتان را معرفی کنید", "chat", "#495057", 90, "forum"),
+    ("clinic", None, "کلینیک: پرسش از متخصص", "پرسش از گفتاردرمان، کاردرمان، روان‌شناس و پزشکِ تأییدشده", "medical", "#1971C2", 5, "clinic"),
+    ("diag", None, "شک و تشخیص", "نشانه‌های اولیه، ارزیابی و تست‌ها، روزهای اولِ بعد از تشخیص", "search", "#0E6E62", 10, "forum"),
+    ("therapy", None, "درمان و توان‌بخشی", "گفتاردرمانی، کاردرمانی و یکپارچگیِ حسی، رفتاردرمانی، دارو و تغذیه", "healing", "#3B5BDB", 20, "forum"),
+    ("daily", None, "زندگیِ روزمره و رفتار", "خواب، غذا، دستشویی، رفتارهای چالشی، بازی و مهارتِ اجتماعی در هر سنی", "home", "#E8794A", 30, "forum"),
+    ("school", None, "آموزش و مدرسه", "مهد و پیش‌دبستانی، مدرسهٔ عادی یا استثنایی، حقوقِ آموزشی", "school", "#7048E8", 40, "forum"),
+    ("family", None, "خانواده و مراقب", "سلامتِ روانِ مراقب، خواهر و برادرها، رابطهٔ زوجین، پدرها", "family", "#D6336C", 60, "forum"),
+    ("rights", None, "حقوق، خدمات و مراکز", "بهزیستی، بیمه و هزینه‌ها، معرفی و تجربهٔ مراکز", "gavel", "#2B8A3E", 70, "forum"),
+    ("heart", None, "درد دل، دلگرمی و معرفی", "موفقیت‌های کوچک، حرف‌های دل، خودتان را معرفی کنید", "favorite", "#C2255C", 80, "forum"),
 ]
+FORUMS_V3_MOVE = {"ages": "daily", "chat": "heart"}   # تالارهای سطحِ اولی که ادغام شدند
 
 # Old Q&A categories → forum (for the one-time migration of questions/answers).
 QA_CATEGORY_FORUM = {
-    "DIAGNOSIS": "diag_eval", "THERAPY": "therapy", "SPEECH": "therapy_speech", "EDUCATION": "school",
-    "SCHOOL": "school", "BEHAVIOR": "daily_behavior", "SLEEP": "daily_sleep", "NUTRITION": "therapy_food",
-    "FAMILY": "family", "RIGHTS": "rights", "SENSORY": "therapy_ot", "SOCIAL": "daily_social",
+    "DIAGNOSIS": "diag", "THERAPY": "therapy", "SPEECH": "therapy", "EDUCATION": "school",
+    "SCHOOL": "school", "BEHAVIOR": "daily", "SLEEP": "daily", "NUTRITION": "therapy",
+    "FAMILY": "family", "RIGHTS": "rights", "SENSORY": "therapy", "SOCIAL": "daily",
 }
 
 LEARN_SEED = [
@@ -3493,10 +3459,28 @@ def community_init():
         _x("INSERT INTO f_forums(id,parent_id,title,description,icon,color,sort,kind,created_at) "
            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(id) DO NOTHING",
            (fid, parent, title, desc, icon, color, sort, kind, now_ms()))
+    _forums_v3()
     for cid, title, icon, color, sort in LEARN_SEED:
         _x("INSERT INTO l_categories(id,title,icon,color,sort) VALUES(%s,%s,%s,%s,%s) ON CONFLICT(id) DO NOTHING",
            (cid, title, icon, color, sort))
     _migrate_v1_content()
+
+
+def _forums_v3():
+    """یک‌بار: گفتگوهای زیرتالارها به تالارِ اصلی می‌روند، زیرتالارها و تالارهای ادغام‌شده بایگانی می‌شوند و
+    توضیحِ هشت تالارِ اصلی به‌روز می‌شود. چیزی حذف نمی‌شود."""
+    store = Store()
+    if store.get("config", "forums_v3"):
+        return
+    keep = [f[0] for f in FORUM_SEED]
+    for old, new in FORUMS_V3_MOVE.items():
+        _x("UPDATE f_topics SET forum_id=%s WHERE forum_id=%s", (new, old))
+        _x("UPDATE f_topics SET forum_id=%s WHERE forum_id IN (SELECT id FROM f_forums WHERE parent_id=%s)", (new, old))
+    _x("UPDATE f_topics t SET forum_id=f.parent_id FROM f_forums f WHERE t.forum_id=f.id AND f.parent_id IS NOT NULL")
+    _x("UPDATE f_forums SET archived=true WHERE NOT (id = ANY(%s))", (keep,))
+    for fid, _p, title, desc, icon, color, sort, kind in FORUM_SEED:
+        _x("UPDATE f_forums SET title=%s, description=%s, sort=%s, archived=false WHERE id=%s", (title, desc, sort, fid))
+    store.put("config", {"id": "forums_v3", "at": now_ms()})
 
 
 def _migrate_v1_content():
@@ -3508,7 +3492,7 @@ def _migrate_v1_content():
     for q in store.all("questions"):
         if q.get("status") == "REMOVED":
             continue
-        fid = QA_CATEGORY_FORUM.get(str(q.get("category") or "").upper(), "chat")
+        fid = QA_CATEGORY_FORUM.get(str(q.get("category") or "").upper(), "heart")
         answers = sorted((a for a in store.all("answers") if a.get("questionId") == q["id"] and a.get("status") != "REMOVED"),
                          key=lambda a: a.get("createdAt", 0))
         last = answers[-1] if answers else None
@@ -4735,7 +4719,7 @@ def build_state(store, uid):
             return u
         # Strip fields that are private to the owner (and admins, via the admin panel).
         pu = dict(u)
-        for k in ("email", "blockedUserIds", "notificationSettings", "tokensValidAfter", "lastSeenAt"):
+        for k in ("email", "deviceKey", "blockedUserIds", "notificationSettings", "tokensValidAfter", "lastSeenAt"):
             pu.pop(k, None)
         if not admin:  # honour the owner's privacy switches (city hidden by default, bio shown by default)
             priv = u.get("privacy") or {}
@@ -4888,6 +4872,36 @@ def do_register(args, ip):
         store.put("users", user)
         set_cred(mail, password, uid)
     return {"token": make_token(uid), "user": user}
+
+
+def do_device(args, ip):
+    """ورود بدونِ ایمیل و رمز (۱.۴): حساب به شناسهٔ دستگاه (ANDROID_ID) بسته است؛ با نصبِ دوباره همان حساب برمی‌گردد.
+    شناسهٔ خام نگه داشته نمی‌شود، فقط هشِ آن. ورود با ایمیل برای حساب‌های قبلی سرِ جایش است."""
+    raw = _s(args.get("device"))
+    if not re.match(r"^[A-Za-z0-9_-]{8,64}$", raw):
+        raise ApiError("شناسهٔ دستگاه نامعتبر است.")
+    key = hashlib.sha256(("hamrah:" + raw).encode("utf-8")).hexdigest()[:40]
+    with MUT_LOCK:
+        store = Store()
+        user = next((u for u in store.all("users") if u.get("deviceKey") == key), None)
+        if user:
+            if user.get("status") in ("BLOCKED", "DELETED"):
+                raise ApiError("این حساب مسدود شده است.")
+            return {"token": make_token(user["id"]), "user": user, "created": False}
+        if not RL.allow("register-ip:" + ip, 10, 3600):
+            raise ApiError(TOO_MANY)
+        if not args.get("acceptedTerms"):
+            raise ApiError("برای ادامه، قوانین و حریم خصوصی را بپذیرید.")
+        name = _s(args.get("displayName"))[:60] or ("همراه " + str(secrets.randbelow(9000) + 1000))
+        uid = new_id("u")
+        user = {
+            "id": uid, "displayName": name, "accountType": "FAMILY", "email": None, "deviceKey": key,
+            "photoUrl": None, "city": None, "bio": None, "status": "ACTIVE",
+            "isAdmin": False, "privacy": {"showCity": False, "showBio": True, "allowMessageRequests": True},
+            "notificationSettings": {}, "blockedUserIds": [], "joinedAt": now_ms(), "updatedAt": now_ms(),
+        }
+        store.put("users", user)
+    return {"token": make_token(uid), "user": user, "created": True}
 
 
 def do_login(args, ip):
@@ -5419,6 +5433,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, do_register(args, ip))
         if path == "/api/auth/login":
             return self._send(200, do_login(args, ip))
+        if path == "/api/auth/device":
+            return self._send(200, do_device(args, ip))
         if path == "/api/auth/forgot":
             return self._send(200, do_forgot(args, ip))
         if path == "/api/auth/reset":

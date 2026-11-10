@@ -45,6 +45,14 @@ class ServerAuthRepository(private val store: ServerStore) : AuthRepository {
         }
     }
 
+    override suspend fun deviceLogin(device: String, displayName: String): DataResult<User> {
+        val body = argsJson("device" to device, "displayName" to displayName, "acceptedTerms" to true)
+        return when (val r = store.api.device(body)) {
+            is ApiResult.Ok -> { store.onAuthenticated(r.data); DataResult.Success(r.data.user) }
+            is ApiResult.Fail -> DataResult.Error(r.message)
+        }
+    }
+
     override fun logout() = store.signOut()
 
     override suspend fun sendPasswordReset(email: String): DataResult<Unit> {

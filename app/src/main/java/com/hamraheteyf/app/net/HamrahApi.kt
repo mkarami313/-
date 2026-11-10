@@ -177,24 +177,15 @@ class HamrahApi(context: Context) {
 
     // ------------------------------------------------------------------ endpoints
 
-    suspend fun register(bodyJson: String): ApiResult<AuthResponse> = withContext(Dispatchers.IO) {
-        runCatching { request("POST", "auth/register", bodyJson, auth = false) }.fold(
-            onSuccess = { raw ->
-                val obj = parse(raw.body)
-                val token = obj?.get("token")?.jsonPrimitive?.contentOrNull
-                val userEl = obj?.get("user")
-                // Guarded: login runs NonCancellable, so a throw here (an unreadable user) crashed the app.
-                val user = if (raw.code in 200..299) userEl?.let { runCatching { json.decodeFromJsonElement(User.serializer(), it) }.getOrNull() } else null
-                if (token != null && user != null) ApiResult.Ok(AuthResponse(token, user))
-                else if (raw.code in 200..299) ApiResult.Fail("پاسخ سرور نامعتبر است.")
-                else ApiResult.Fail(errorOf(obj))
-            },
-            onFailure = { ApiResult.Fail(NET_ERR, network = true) },
-        )
-    }
+    suspend fun register(bodyJson: String): ApiResult<AuthResponse> = authPost("auth/register", bodyJson)
 
-    suspend fun login(bodyJson: String): ApiResult<AuthResponse> = withContext(Dispatchers.IO) {
-        runCatching { request("POST", "auth/login", bodyJson, auth = false) }.fold(
+    suspend fun login(bodyJson: String): ApiResult<AuthResponse> = authPost("auth/login", bodyJson)
+
+    /** ورود بدونِ ایمیل: حسابِ بسته به شناسهٔ دستگاه. */
+    suspend fun device(bodyJson: String): ApiResult<AuthResponse> = authPost("auth/device", bodyJson)
+
+    private suspend fun authPost(path: String, bodyJson: String): ApiResult<AuthResponse> = withContext(Dispatchers.IO) {
+        runCatching { request("POST", path, bodyJson, auth = false) }.fold(
             onSuccess = { raw ->
                 val obj = parse(raw.body)
                 val token = obj?.get("token")?.jsonPrimitive?.contentOrNull

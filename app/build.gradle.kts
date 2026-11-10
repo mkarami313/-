@@ -27,8 +27,8 @@ android {
         applicationId = "com.rasta.hamrah"   // renamed from com.hamraheteyf.app (2026-10-31)
         minSdk = 24
         targetSdk = 35
-        versionCode = 10020   // 10000+ : above the 9000 "moved" stub of the old package
-        versionName = "1.3.1"
+        versionCode = 10021   // 10000+ : above the 9000 "moved" stub of the old package
+        versionName = "1.4.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

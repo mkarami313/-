@@ -40,6 +40,10 @@ interface AuthRepository {
 
     suspend fun login(email: String, password: String): DataResult<User>
 
+    /** ورود بدونِ ایمیل و رمز: حساب به این دستگاه بسته است (فقط نسخهٔ سرور). */
+    suspend fun deviceLogin(device: String, displayName: String): DataResult<User> =
+        DataResult.Error("این نسخه ورودِ بدونِ ثبت‌نام ندارد.")
+
     fun logout()
 
     suspend fun sendPasswordReset(email: String): DataResult<Unit>
