@@ -57,6 +57,7 @@ fun ForumHubScreen(
     }
     OnResume { if (feedKind != HubFeed.FORUMS) feed.refresh() else scope.launch { client?.let { ForumTreeCache.load(it, force = true) } } }
 
+    val disabledFeatures by com.hamraheteyf.app.ui.navigation.FeatureFlags.disabled.collectAsState()
     Scaffold(
         topBar = {
             AppTopBar("انجمن", actions = {
@@ -83,7 +84,7 @@ fun ForumHubScreen(
             ) {
                 LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(top = Dimens.xs, bottom = FabClearance)) {
                     if (feedKind == HubFeed.FORUMS) {
-                        forumDirectory(tree, onOpenClinic, onOpenGroups, onOpenForum) {
+                        forumDirectory(tree, onOpenClinic, onOpenGroups, onOpenForum, showGroups = "groups" !in disabledFeatures) {
                             scope.launch { client?.let { ForumTreeCache.load(it, force = true) } }
                         }
                     } else {
@@ -110,11 +111,13 @@ private fun LazyListScope.forumDirectory(
     onOpenClinic: () -> Unit,
     onOpenGroups: () -> Unit,
     onOpenForum: (String) -> Unit,
+    showGroups: Boolean = true,
     onRetry: () -> Unit,
 ) {
     val pad = Modifier.padding(horizontal = Dimens.gutter, vertical = Dimens.cardGap / 2)
     item(key = "clinic") { ClinicEntryCard(tree?.firstOrNull { it.isClinic }, onOpenClinic, pad) }
-    item(key = "groups") { GroupsEntryCard(onOpenGroups, pad) }
+    // The server switch that hides the «کانون‌ها» tile hides this shortcut too (it used to open an error page).
+    if (showGroups) item(key = "groups") { GroupsEntryCard(onOpenGroups, pad) }
     item(key = "tree-title") { SectionTitle("تالارها", Modifier.padding(horizontal = Dimens.gutter)) }
     when {
         tree == null && ForumTreeCache.error != null -> item(key = "tree-error") { ErrorView(ForumTreeCache.error.orEmpty(), onRetry) }
