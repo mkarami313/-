@@ -129,4 +129,7 @@ class AccountViewModel(
     fun logout() = auth.logout()
 
     fun deleteAccount(password: String, onResult: (String?) -> Unit) = runBusyInline({ auth.deleteAccount(password) }, onResult)
+
+    /** حسابِ «بدونِ ثبت‌نام» رمز ندارد؛ حذف با تأییدِ صریح انجام می‌شود. */
+    fun deleteDeviceAccount(onResult: (String?) -> Unit) = runBusyInline({ auth.deleteAccount() }, onResult)
 }

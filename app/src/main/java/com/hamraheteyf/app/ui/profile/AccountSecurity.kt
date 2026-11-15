@@ -62,6 +62,39 @@ fun ChangePasswordDialog(busy: Boolean, onDismiss: () -> Unit, onSubmit: (String
     )
 }
 
+/** حذفِ حسابِ «بدونِ ثبت‌نام»: رمزی در کار نیست؛ کاربر با تیک‌زدن و دکمهٔ دوم تأیید می‌کند. */
+@Composable
+fun DeleteDeviceAccountDialog(busy: Boolean, onDismiss: () -> Unit, onSubmit: ((String?) -> Unit) -> Unit) {
+    var sure by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text("حذف حساب") },
+        text = {
+            Column {
+                Text("با حذف حساب، اطلاعات شخصی شما (پروفایل، اطلاعات کودک، پیام‌ها و عضویت‌ها) حذف می‌شوند و مشارکت‌های عمومی‌تان ناشناس می‌شوند. این عمل قابل بازگشت نیست.", style = MaterialTheme.typography.bodyMedium)
+                Spacer(Modifier.height(8.dp))
+                Text("این حساب به همین گوشی بسته است و پشتیبانِ دیگری ندارد؛ بعد از حذف، با «شروع کنید» یک حسابِ تازه و خالی ساخته می‌شود.", style = MaterialTheme.typography.bodySmall)
+                Spacer(Modifier.height(4.dp))
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Checkbox(checked = sure, onCheckedChange = { sure = it; error = null }, enabled = !busy)
+                    Text("می‌دانم که برگشت‌پذیر نیست.", style = MaterialTheme.typography.bodyMedium)
+                }
+                error?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = !busy && sure, onClick = { onSubmit { err -> if (err != null) error = err } }) {
+                Text(if (busy) "در حال حذف…" else "حذف می‌کنم", color = MaterialTheme.colorScheme.error)
+            }
+        },
+        dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("انصراف") } },
+    )
+}
+
 @Composable
 fun DeleteAccountDialog(busy: Boolean, onDismiss: () -> Unit, onSubmit: (String, (String?) -> Unit) -> Unit) {
     var password by remember { mutableStateOf("") }

@@ -93,7 +93,16 @@ fun SettingsScreen(onBack: () -> Unit) {
             SectionTitle("حساب و داده‌ها")
             OutlinedButton(enabled = !busy, onClick = { vm.exportMyData() }, modifier = Modifier.fillMaxWidth()) { Text(if (busy) "در حال آماده‌سازی…" else "دریافت نسخهٔ اطلاعات حساب") }
             Spacer(Modifier.height(8.dp))
-            OutlinedButton(onClick = { showPassword = true }, modifier = Modifier.fillMaxWidth()) { Text("تغییر رمز عبور") }
+            // حسابِ «بدونِ ثبت‌نام» ایمیل و رمز ندارد: «تغییرِ رمز» برایش معنا ندارد.
+            val deviceAccount = user != null && user?.email == null
+            if (deviceAccount) {
+                Text(
+                    "این حساب بدونِ ثبت‌نام ساخته شده و به همین گوشی بسته است؛ رمزی ندارد.",
+                    style = MaterialTheme.typography.labelMedium, color = mutedColor(),
+                )
+            } else {
+                OutlinedButton(onClick = { showPassword = true }, modifier = Modifier.fillMaxWidth()) { Text("تغییر رمز عبور") }
+            }
             Spacer(Modifier.height(8.dp))
             OutlinedButton(onClick = { vm.logout() }, modifier = Modifier.fillMaxWidth()) { Text("خروج از حساب") }
             Spacer(Modifier.height(8.dp))
@@ -111,7 +120,10 @@ fun SettingsScreen(onBack: () -> Unit) {
     if (showDelete) {
         val vault = com.hamraheteyf.app.security.LocalCredentialVault.current
         val email = user?.email
-        DeleteAccountDialog(busy, onDismiss = { showDelete = false }) { pw, report ->
+        if (user != null && email == null) {
+            // Device account: nothing to type. The second, explicit tap is the confirmation the server asks for.
+            DeleteDeviceAccountDialog(busy, onDismiss = { showDelete = false }) { report -> vm.deleteDeviceAccount(report) }
+        } else DeleteAccountDialog(busy, onDismiss = { showDelete = false }) { pw, report ->
             vm.deleteAccount(pw) { err ->
                 // The account is gone: its saved fingerprint sign-in would only fail on every launch.
                 if (err == null && email != null && vault.savedEmail().equals(email, ignoreCase = true)) runCatching { vault.clear() }
