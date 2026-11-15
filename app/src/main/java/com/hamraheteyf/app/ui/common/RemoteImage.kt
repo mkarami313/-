@@ -99,6 +99,7 @@ private fun fetchBytes(url: String): Fetched = try {
     val c = URL(url).openConnection() as HttpURLConnection
     try {
         c.connectTimeout = 15000; c.readTimeout = 30000
+        c.instanceFollowRedirects = false   // a redirect could lead off our host
         val code = c.responseCode
         if (code in 200..299) Fetched(c.inputStream.use { it.readBytes() }, false, code)
         else Fetched(null, code >= 500 || code == 408 || code == 429, code)
@@ -112,6 +113,7 @@ private const val FULL_PX = 900
 
 /** Memory → disk → network (3 attempts with back-off), decoded to about [maxPx] per side. Null means it failed. */
 private suspend fun loadBitmap(ctx: Context, url: String, maxPx: Int): Bitmap? = withContext(Dispatchers.IO) {
+    if (!com.hamraheteyf.app.net.ImageHosts.allowed(url)) return@withContext null   // never fetch from a host we don't run
     val key = FileUrls.cacheKey(url)
     ImageDiskCache.get(ctx, key)?.let { b -> decodeSampled(b, maxPx)?.let { return@withContext it } }
     var resigned = false

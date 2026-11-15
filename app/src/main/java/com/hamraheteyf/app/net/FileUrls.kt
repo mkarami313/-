@@ -98,6 +98,21 @@ class FileUrlResolver(
     }
 }
 
+/**
+ * Images are only ever downloaded from our own API host. A profile photo (or any other image field) that
+ * points somewhere else is not fetched at all: opening a page must never make the phone call a server chosen
+ * by another user, which would hand them the viewer's IP address and the time they were online.
+ */
+object ImageHosts {
+    fun allowed(url: String, base: String = BuildConfig.API_BASE_URL): Boolean = runCatching {
+        val u = java.net.URI(url.trim())
+        val b = java.net.URI(base)
+        val port = { x: java.net.URI -> if (x.port != -1) x.port else if (x.scheme.equals("https", true)) 443 else 80 }
+        u.scheme != null && u.scheme.equals(b.scheme, ignoreCase = true) && u.userInfo == null &&
+            !u.host.isNullOrEmpty() && u.host.equals(b.host, ignoreCase = true) && port(u) == port(b)
+    }.getOrDefault(false)
+}
+
 /** App-wide resolver bound to the signed-in [HamrahApi]. Safe to call before [attach] (falls back to bare URLs). */
 object FileUrls {
     @Volatile private var resolver: FileUrlResolver? = null
