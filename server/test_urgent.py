@@ -130,6 +130,13 @@ def b2_renewal(ta, ua):
     code, j2 = device("b2")
     check("B2 device account signs back in silently with the same id", j2.get("created") is False and j2["user"]["id"] == uid, j2)
     check("B2 the new device token works", jhttp("GET", "/api/state", token=j2["token"])[0] == 200)
+    # the app's silent re-open sends NO acceptedTerms: it may only ever return an existing account
+    dev_id = "zzurg%sb2" % T.RUN
+    code, j4, _ = jhttp("POST", "/api/auth/device", {"device": dev_id})
+    check("B2 silent re-open (no acceptedTerms) returns the existing account", j4.get("created") is False and j4["user"]["id"] == uid, j4)
+    n_before = len(H.Store().all("users"))
+    code, j5, _ = jhttp("POST", "/api/auth/device", {"device": "zzurg%snever" % T.RUN})
+    check("B2 silent re-open never creates an account", not j5.get("token") and len(H.Store().all("users")) == n_before, j5)
     # blocked account: neither renewal nor device re-login
     set_user(uid, status="BLOCKED")
     old = H.make_token(uid, int(time.time()) - 2 * 86400)
