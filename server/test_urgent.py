@@ -356,6 +356,54 @@ def i1_features(at, ta):
     check("I1 sections work again after switching back", act(ta, "recList", {"kind": "course"}).get("ok") is True)
 
 
+def admin_switches(at, ta):
+    """The admin panel's «بخش‌های اپ» switches: admin only, core sections locked, state readable from the server."""
+    def disabled(tok=None):
+        return set(jhttp("GET", "/api/features", token=tok)[1].get("disabled") or [])
+
+    before = disabled(at)
+    st = act(at, "adminStats")
+    check("SW adminStats carries the current switches", st.get("ok") and set(st["data"].get("disabledFeatures", ["?"])) == before, str(st)[:200])
+    check("SW adminStats lists the locked sections", set(st["data"].get("lockedFeatures") or []) == {"home", "profile", "qa"}, st["data"].get("lockedFeatures"))
+    check("SW adminStats is admin only", act(ta, "adminStats").get("ok") is False)
+    for core in ("home", "profile", "qa"):
+        r = act(at, "setFeatureEnabled", {"id": core, "enabled": False})
+        check("SW %s cannot be switched off, even by an admin" % core, r.get("ok") is False and "پایه" in r.get("error", ""), r)
+    check("SW nothing changed after the refused calls", disabled(at) == before)
+    for bad in ("", "nope", "admin", "../x", "QA", None, 5):
+        r = act(at, "setFeatureEnabled", {"id": bad, "enabled": False})
+        check("SW unknown section id refused: %r" % (bad,), r.get("ok") is False, r)
+    for bad in ("false", 0, None, "off"):
+        r = act(at, "setFeatureEnabled", {"id": "courses", "enabled": bad})
+        check("SW enabled must be a real boolean: %r" % (bad,), r.get("ok") is False, r)
+    check("SW still nothing changed", disabled(at) == before)
+    try:
+        for tok, who in ((ta, "normal user"), (None, "no login")):
+            code, r, _ = jhttp("POST", "/api/action", {"name": "setFeatureEnabled", "args": {"id": "courses", "enabled": False}}, tok)
+            check("SW %s cannot switch a section" % who, (code == 401 or r.get("ok") is False) and "courses" not in disabled(at) - before, (code, r))
+        every = ["groups", "guides", "messages", "donations", "childfile", "booking", "cards", "tools", "courses", "places", "directory"]
+        for f in every:
+            r = act(at, "setFeatureEnabled", {"id": f, "enabled": False})
+            check("SW %s off: reply carries the new list" % f, r.get("ok") is True and f in (r.get("data") or {}).get("disabled", []), r)
+            check("SW %s off: a normal user sees it at once" % f, f in disabled(ta))
+        check("SW with everything switchable off, the home feed still loads", act(ta, "forumHome").get("ok") is True)
+        check("SW ...and the state, the forum and the profile still work", bool(state(ta).get("users"))
+              and act(ta, "forumTree").get("ok") is True and act(ta, "updateProfile", {"displayName": "cm a"}).get("ok") is True)
+        check("SW ...and the admin can still open the panel", act(at, "adminStats").get("ok") is True)
+        check("SW learning cards leave the home feed while «آموزش‌ها» is off", act(ta, "forumHome")["data"].get("learn") == [])
+        check("SW learning actions refused while off", act(ta, "learnCategories").get("ok") is False)
+        r = act(at, "setFeatureEnabled", {"id": "guides", "enabled": True})
+        check("SW guides on again: gone from the reply list", r.get("ok") is True and "guides" not in r["data"]["disabled"], r)
+        n_pub = H._q("SELECT count(*) AS n FROM l_items WHERE status='PUBLISHED'", one=True)["n"]
+        check("SW learning cards are back on the home feed", (len(act(ta, "forumHome")["data"].get("learn") or []) > 0) == (n_pub > 0), n_pub)
+        log = [x for x in H.Store().all("adminAudit") if x.get("actionType") == "SET_FEATURE" and x.get("adminId") == T.made[0][1]]
+        check("SW switching is written to the admin log", len(log) >= len(every), len(log))
+    finally:
+        for f in ["groups", "guides", "messages", "donations", "childfile", "booking", "cards", "tools", "courses", "places", "directory"]:
+            act(at, "setFeatureEnabled", {"id": f, "enabled": f not in before})
+    check("SW the previous switches are restored", disabled(at) == before, (before, disabled(at)))
+
+
 def main():
     admin_mail = "cm-%s-admin@example.invalid" % T.RUN
     subprocess.run([sys.executable, os.path.join(T.HERE, "hamrah-api.py"), "create-admin", admin_mail, "adminpw-" + T.RUN, "cm admin"],
@@ -371,6 +419,7 @@ def main():
     b7_photo(ta, ua, tb, ub)
     b5_files(at, ta, ua, tb, ub)
     i1_features(at, ta)
+    admin_switches(at, ta)
     log_path = os.path.join(T.HERE, "run.log")
     log = open(log_path, encoding="utf-8", errors="replace").read() if os.path.exists(log_path) else ""
     check("no server-side tracebacks in run.log", "error in " not in log, log[-600:] if "error in " in log else "")

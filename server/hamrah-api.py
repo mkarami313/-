@@ -2236,7 +2236,9 @@ def a_donationRemove(store, uid, args):
 
 
 
-CORE_FEATURES = {"home", "profile"}
+# Never switchable: «خانه», «من» (settings and the admin panel live there) and «انجمن» — the home feed is
+# built from the forum, so without it the first screen of every app version is an error page.
+CORE_FEATURES = {"home", "profile", "qa"}
 KNOWN_FEATURES = {"home", "qa", "groups", "messages", "guides", "directory", "donations", "childfile", "booking", "tools", "courses", "places", "profile", "cards"}
 
 
@@ -2248,6 +2250,8 @@ def disabled_features(store):
 def set_feature(store, fid, enabled):
     if fid in CORE_FEATURES:
         raise ApiError("این بخش پایه است و خاموش نمی‌شود.")
+    if fid not in KNOWN_FEATURES:
+        raise ApiError("بخش نامعتبر است.")
     doc = store.get("config", "features") or {"id": "features", "disabled": []}
     off = set(doc.get("disabled", []))
     (off.discard if enabled else off.add)(fid)
@@ -2260,8 +2264,11 @@ def a_setFeatureEnabled(store, uid, args):
     if not is_admin(store, uid):
         raise ApiError("دسترسی مدیر لازم است.")
     fid = _s(args.get("id"))
-    set_feature(store, fid, bool(args.get("enabled")))
-    _log_admin(store, uid, "SET_FEATURE", "FEATURE", fid, "enabled=%s" % bool(args.get("enabled")))
+    if not isinstance(args.get("enabled"), bool):
+        raise ApiError("وضعیتِ روشن/خاموش نامعتبر است.")
+    set_feature(store, fid, args["enabled"])
+    _log_admin(store, uid, "SET_FEATURE", "FEATURE", fid, "enabled=%s" % args["enabled"])
+    return {"disabled": sorted(disabled_features(store)), "locked": sorted(CORE_FEATURES)}
 
 
 # ---- Generic records: child file, tools, booking, courses, places/events ----
@@ -2919,6 +2926,7 @@ def a_adminStats(store, uid, args):
         "records": {k: sum(1 for d in store.all("r_" + k) if d.get("status") != "REMOVED") for k in REC_KINDS},
         "files": {"count": len(files), "bytes": sum(int(f.get("size", 0) or 0) for f in files)},
         "moduleRoles": module_roles(store),
+        "disabledFeatures": sorted(disabled_features(store)), "lockedFeatures": sorted(CORE_FEATURES),
         "disabledFeatures": disabled_features(store),
         "smtpConfigured": smtp_configured(),
         "generatedAt": now,
@@ -3948,8 +3956,10 @@ def a_forumHome(store, uid, args):
     hot = a_forumTopics(store, uid, {"sort": "hot", "size": 8})["items"]
     clinic = a_forumTopics(store, uid, {"clinic": True, "sort": "active", "size": 6})["items"]
     fresh = a_forumTopics(store, uid, {"sort": "new", "size": 6})["items"]
-    learn = _learn_cards(store, uid, _q("SELECT * FROM l_items WHERE status='PUBLISHED' "
-                                       "ORDER BY featured DESC, published_at DESC LIMIT 10"))
+    # «آموزش‌ها» switched off (or not for this role): no learning cards on the home feed either —
+    # they would open into "این بخش برای شما فعال نیست".
+    learn = [] if "guides" in blocked_modules(store, uid) else _learn_cards(
+        store, uid, _q("SELECT * FROM l_items WHERE status='PUBLISHED' ORDER BY featured DESC, published_at DESC LIMIT 10"))
     unread = (_q("SELECT count(*) AS n FROM f_follows f JOIN f_topics t ON t.id=f.topic_id "
                  "LEFT JOIN f_reads r ON r.topic_id=t.id AND r.user_id=f.user_id "
                  "WHERE f.user_id=%s AND t.status='PUBLISHED' AND (r.read_at IS NULL OR r.read_at < t.last_post_at) "

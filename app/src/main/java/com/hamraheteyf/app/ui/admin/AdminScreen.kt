@@ -61,7 +61,7 @@ fun AdminScreen(onBack: () -> Unit) {
         Column(Modifier.padding(padding).fillMaxSize()) {
             InfoBanner("دسترسی مدیر محدود و قابل ممیزی است. مشاهدهٔ مدارک و تصمیم‌ها در «گزارش تغییرات» ثبت می‌شوند.", Modifier.padding(12.dp))
             ScrollableTabRow(selectedTabIndex = tab, edgePadding = 8.dp) {
-                listOf("گزارش‌ها", "تأیید تخصص", "کاربران", "ماژول‌ها و نقش‌ها", "آمار", "اعلان همگانی", "تغییرات").forEachIndexed { i, t ->
+                listOf("گزارش‌ها", "تأیید تخصص", "کاربران", "بخش‌های اپ", "آمار", "اعلان همگانی", "تغییرات").forEachIndexed { i, t ->
                     Tab(selected = tab == i, onClick = { tab = i }, text = { Text(t, maxLines = 1) })
                 }
             }
