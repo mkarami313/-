@@ -30,10 +30,11 @@ BT="$(ls -d "${ANDROID_HOME:-/opt/android-sdk}"/build-tools/* 2>/dev/null | sort
 AAPT2="$(command -v aapt2 || echo "$BT/aapt2")"
 APKSIGNER="$(command -v apksigner || echo "$BT/apksigner")"
 
-badge="$("$AAPT2" dump badging "$APK" | head -1)"
-pkg="$(sed -n "s/.*name='\([^']*\)'.*/\1/p" <<<"$badge")"
-VC="$(sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p" <<<"$badge")"
-VN="$(sed -n "s/.*versionName='\([^']*\)'.*/\1/p" <<<"$badge")"
+badge="$("$AAPT2" dump badging "$APK")"
+badge="$(grep -m1 '^package: ' <<<"$badge")"
+pkg="$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" <<<"$badge")"
+VC="$(sed -n "s/.* versionCode='\([0-9]*\)'.*/\1/p" <<<"$badge")"
+VN="$(sed -n "s/.* versionName='\([^']*\)'.*/\1/p" <<<"$badge")"
 [ "$pkg" = "$PKG" ] || { echo "wrong package: '$pkg' (expected $PKG)"; exit 1; }
 [ -n "$VC" ] && [ -n "$VN" ] || { echo "could not read the version from the APK"; exit 1; }
 
