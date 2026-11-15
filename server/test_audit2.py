@@ -90,7 +90,7 @@ def main():
     data(ta, "unblockUser", {"targetUserId": ud})
 
     # ---- Persian normalisation in search -------------------------------------------------------
-    tn = data(ta, "forumCreateTopic", {"forumId": "daily_sleep", "title": "خواب كودك و بازي",  # Arabic kaf/yeh
+    tn = data(ta, "forumCreateTopic", {"forumId": "daily", "title": "خواب كودك و بازي",  # Arabic kaf/yeh
                                        "body": "شب‌ها نمی‌خوابد و می‌خواهم راهکار بدانم"})["id"]
     hits = lambda q: [t["id"] for t in data(tb, "forumTopics", {"q": q})["items"]]  # noqa: E731
     check("Persian kaf/yeh finds Arabic-typed title", tn in hits("کودک و بازی"), hits("کودک و بازی"))
@@ -103,7 +103,7 @@ def main():
     check("group directory normalises", any(x["id"] == gn for x in data(tb, "groupDirectory", {"q": "والدین کرج"})["items"]))
 
     # ---- double submit: identical topic / reply within the window is stored once ------------
-    args = {"forumId": "daily_eat", "title": "غذا نخوردن کودک", "body": "هیچ غذایی جز ماکارونی نمی‌خورد"}
+    args = {"forumId": "school", "title": "غذا نخوردن کودک", "body": "هیچ غذایی جز ماکارونی نمی‌خورد"}
     t1 = data(tb, "forumCreateTopic", args)["id"]
     check("same topic twice -> one topic", data(tb, "forumCreateTopic", args)["id"] == t1)
     r1 = data(tc, "forumReply", {"topicId": t1, "body": "ما هم همین مشکل را داشتیم"})

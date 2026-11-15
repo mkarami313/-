@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""End-to-end smoke test for hamrah-api. Run ON the server (it needs .env + DB access):
+"""End-to-end smoke test for hamrah-api. Run ON the server against the TEST instance only:
 
-    cd /home/rasta/hamrah && python3 test_smoke.py            # against http://127.0.0.1:8150
+    cd /home/rasta/hamrah-v2test && BASE=http://127.0.0.1:8151 python3 test_smoke.py
+
+NEVER run it against production: it publishes throwaway content that real users see until the
+cleanup at the end (that happened once). It refuses to start unless DB_DSN is the v2test database.
 
 Creates throwaway accounts (smoke-*@example.invalid) and deletes them (plus everything they own)
-at the end. It never touches other users' data. Exit code 0 = all checks passed.
+at the end. Exit code 0 = all checks passed.
 """
 import os
 import sys
@@ -18,12 +21,14 @@ import threading
 import urllib.request
 import urllib.error
 
-BASE = os.environ.get("BASE", "http://127.0.0.1:8150")
+BASE = os.environ.get("BASE", "http://127.0.0.1:8151")
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.argv = [sys.argv[0]]
 spec = importlib.util.spec_from_file_location("hamrah_api", os.path.join(HERE, "hamrah-api.py"))
 H = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(H)
+if "v2test" not in H.DB_DSN:
+    sys.exit("refusing to run: DB_DSN is not the v2test database (this suite must never touch production)")
 
 PASS = FAIL = 0
 RUN = uuid.uuid4().hex[:8]

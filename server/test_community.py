@@ -116,17 +116,17 @@ def main():
 
     # ---- forum tree + topics --------------------------------------------------------------
     tree = data(ta, "forumTree")["forums"]
-    check("tree has 10 top-level forums", len(tree) == 10, [f["id"] for f in tree])
+    check("tree has the 8 main forums (1.4)", len(tree) == 8, [f["id"] for f in tree])
     check("clinic forum present", any(f["kind"] == "clinic" for f in tree))
-    check("subforums nested", any(f["id"] == "therapy" and len(f["children"]) == 5 for f in tree))
+    check("no sub-forums any more (1.4)", all(not f.get("children") for f in tree))
     check("topic needs forum", act(ta, "forumCreateTopic", {"title": "عنوان آزمایشی", "body": "متن کافی آزمایشی"}).get("ok") is False)
-    check("topic title min", act(ta, "forumCreateTopic", {"forumId": "daily_sleep", "title": "ab", "body": "متن کافی آزمایشی"}).get("ok") is False)
+    check("topic title min", act(ta, "forumCreateTopic", {"forumId": "daily", "title": "ab", "body": "متن کافی آزمایشی"}).get("ok") is False)
     img = upload(ta)
     foreign = upload(tb)
-    check("foreign image rejected", act(ta, "forumCreateTopic", {"forumId": "daily_sleep", "title": "خواب شبانه", "body": "متن کافی آزمایشی", "images": [foreign]}).get("ok") is False)
-    t1 = data(ta, "forumCreateTopic", {"forumId": "daily_sleep", "title": "خواب شبانهٔ پسرم", "body": "شب‌ها دیر می‌خوابد، چه کنیم؟", "images": [img]})["id"]
+    check("foreign image rejected", act(ta, "forumCreateTopic", {"forumId": "daily", "title": "خواب شبانه", "body": "متن کافی آزمایشی", "images": [foreign]}).get("ok") is False)
+    t1 = data(ta, "forumCreateTopic", {"forumId": "daily", "title": "خواب شبانهٔ پسرم", "body": "شب‌ها دیر می‌خوابد، چه کنیم؟", "images": [img]})["id"]
     lst = data(tb, "forumTopics", {"forumId": "daily"})["items"]
-    check("parent forum lists subforum topic", any(t["id"] == t1 for t in lst))
+    check("forum lists its topic", any(t["id"] == t1 for t in lst))
     check("card has images + author", any(t["id"] == t1 and t["images"] == [img] and t["author"]["name"] == "cm a" for t in lst))
     check("unread for others", next(t for t in lst if t["id"] == t1)["unread"] is True)
     det = data(tb, "forumTopic", {"topicId": t1})
@@ -171,22 +171,22 @@ def main():
     check("paged: last page by default", det["pages"] == 2 and det["page"] == 1 and len(det["posts"]) == 3, (det["pages"], det["page"], len(det["posts"])))
     check("paged: page 0 has 30", len(data(ta, "forumTopic", {"topicId": t1, "page": 0})["posts"]) == 30)
     # anonymous
-    t2 = data(ta, "forumCreateTopic", {"forumId": "family_care", "title": "خیلی خسته‌ام", "body": "نمی‌دانم چطور ادامه بدهم", "anonymous": True})["id"]
+    t2 = data(ta, "forumCreateTopic", {"forumId": "family", "title": "خیلی خسته‌ام", "body": "نمی‌دانم چطور ادامه بدهم", "anonymous": True})["id"]
     card = next(t for t in data(tb, "forumTopics", {"forumId": "family"})["items"] if t["id"] == t2)
     check("anonymous hides author", card["author"]["id"] == "" and card["author"]["anonymous"])
     check("anonymous not in authorId filter", all(t["id"] != t2 for t in data(tb, "forumTopics", {"authorId": ua})["items"]))
     check("admin sees anonymous author", next(t for t in data(at, "forumTopics", {"forumId": "family"})["items"] if t["id"] == t2)["author"]["id"] == ua)
     # poll
-    t3 = data(ta, "forumCreateTopic", {"forumId": "chat", "title": "کدام روش؟", "body": "نظرتان را بگویید",
+    t3 = data(ta, "forumCreateTopic", {"forumId": "heart", "title": "کدام روش؟", "body": "نظرتان را بگویید",
                                        "poll": {"question": "کدام؟", "options": ["الف", "ب", "ج"], "days": 7}})["id"]
     check("poll one option needed", act(tb, "forumVote", {"topicId": t3, "options": [0, 1]}).get("ok") is False)
     pv = data(tb, "forumVote", {"topicId": t3, "options": [1]})["poll"]
     check("poll vote counted", pv["counts"] == [0, 1, 0] and pv["myVotes"] == [1] and pv["voters"] == 1, pv)
     pv = data(tb, "forumVote", {"topicId": t3, "options": [2]})["poll"]
     check("poll revote moves", pv["counts"] == [0, 0, 1])
-    check("bad poll rejected", act(ta, "forumCreateTopic", {"forumId": "chat", "title": "یک گزینه", "body": "متن کافی", "poll": {"options": ["x"]}}).get("ok") is False)
+    check("bad poll rejected", act(ta, "forumCreateTopic", {"forumId": "heart", "title": "یک گزینه", "body": "متن کافی", "poll": {"options": ["x"]}}).get("ok") is False)
     # clinic: only verified pros (and the asker) answer
-    t4 = data(ta, "forumCreateTopic", {"forumId": "clinic_speech", "title": "تأخیر گفتار در سه سالگی", "body": "پسرم هنوز جمله نمی‌گوید"})["id"]
+    t4 = data(ta, "forumCreateTopic", {"forumId": "clinic", "title": "تأخیر گفتار در سه سالگی", "body": "پسرم هنوز جمله نمی‌گوید"})["id"]
     check("clinic topic kind question", data(ta, "forumTopic", {"topicId": t4})["topic"]["kind"] == "question")
     check("family cannot answer in clinic", act(tb, "forumReply", {"topicId": t4, "body": "به نظرم صبر کنید"}).get("ok") is False)
     pe = data(tc, "forumReply", {"topicId": t4, "body": "ارزیابی گفتاردرمانی پیشنهاد می‌شود"})["id"]
@@ -211,7 +211,7 @@ def main():
     check("block", act(td, "blockUser", {"targetUserId": ua}).get("ok"))
     check("blocked author's topics hidden from blocker", all(t["author"]["id"] != ua for t in data(td, "forumTopics", {})["items"]))
     check("blocker's view of topic denied", act(td, "forumTopic", {"topicId": t1}).get("ok") is False)
-    td_topic = data(td, "forumCreateTopic", {"forumId": "chat", "title": "سلام به همه", "body": "تازه آمده‌ام"})["id"]
+    td_topic = data(td, "forumCreateTopic", {"forumId": "heart", "title": "سلام به همه", "body": "تازه آمده‌ام"})["id"]
     check("blocked user can't see blocker's topic", act(ta, "forumTopic", {"topicId": td_topic}).get("ok") is False)
     # home feed
     home = data(tb, "forumHome")
@@ -330,7 +330,7 @@ def main():
 
     # ---- migration of v1 content (idempotent init) -------------------------------------------
     subprocess.run([sys.executable, os.path.join(HERE, "hamrah-api.py"), "init-db"], check=True, capture_output=True, cwd=HERE)
-    check("init-db idempotent", len(data(ta, "forumTree")["forums"]) == 10)
+    check("init-db idempotent", len(data(ta, "forumTree")["forums"]) == 8)
 
 
 def cleanup():

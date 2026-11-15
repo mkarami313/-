@@ -58,7 +58,7 @@ def main():
     data(at, "reviewVerification", {"requestId": vreq["id"], "decision": "VERIFIED", "reason": "ok"})
 
     # ---- anonymity: the opener of an anonymous topic is not unmasked by their own replies -----
-    t_anon = data(ta, "forumCreateTopic", {"forumId": "family_care", "title": "یک درد دل ناشناس", "body": "متنِ ناشناس کافی", "anonymous": True})["id"]
+    t_anon = data(ta, "forumCreateTopic", {"forumId": "family", "title": "یک درد دل ناشناس", "body": "متنِ ناشناس کافی", "anonymous": True})["id"]
     pb = data(tb, "forumReply", {"topicId": t_anon, "body": "همدلی می‌کنم"})["id"]
     pa = data(ta, "forumReply", {"topicId": t_anon, "body": "ممنون از شما", "quoteId": pb})["id"]
     data(tb, "forumReply", {"topicId": t_anon, "body": "خواهش می‌کنم", "quoteId": pa})
@@ -74,7 +74,7 @@ def main():
     check("profile stats skip replies in own anon topics", data(tb, "userProfile", {"userId": ua})["stats"]["replies"] == 0)
 
     # ---- counters stay consistent through hide + delete ------------------------------------------
-    t_c = data(ta, "forumCreateTopic", {"forumId": "clinic_speech", "title": "پرسش برای شمارنده", "body": "متن کافی برای آزمون"})["id"]
+    t_c = data(ta, "forumCreateTopic", {"forumId": "clinic", "title": "پرسش برای شمارنده", "body": "متن کافی برای آزمون"})["id"]
     p1 = data(tc, "forumReply", {"topicId": t_c, "body": "پاسخ متخصص یک"})["id"]
     p2 = data(ta, "forumReply", {"topicId": t_c, "body": "پاسخ پرسش‌کننده"})["id"]
     data(ta, "forumModerate", {"topicId": t_c, "op": "accept", "postId": p1})
@@ -87,7 +87,7 @@ def main():
     check("accept own reply refused", rejected(act(ta, "forumModerate", {"topicId": t_c, "op": "accept", "postId": p2})))
 
     # ---- likes: hidden content can't be liked; deleted accounts take their likes with them ----------
-    t_l = data(ta, "forumCreateTopic", {"forumId": "chat", "title": "موضوعِ پسندها", "body": "متن کافی برای پسند"})["id"]
+    t_l = data(ta, "forumCreateTopic", {"forumId": "heart", "title": "موضوعِ پسندها", "body": "متن کافی برای پسند"})["id"]
     pl = data(tb, "forumReply", {"topicId": t_l, "body": "پاسخی برای پنهان شدن"})["id"]
     act(at, "hideContent", {"type": "POST", "contentId": pl, "reason": "تست"})
     check("cannot like hidden reply", rejected(act(ta, "forumLike", {"id": pl})))
@@ -98,12 +98,12 @@ def main():
     check("deleted account's like removed from counter", topic(ta, t_l)["topic"]["likeCount"] == 0)
 
     # ---- polls: wrong types / out-of-range / locked are clean refusals --------------------------------
-    t_p = data(ta, "forumCreateTopic", {"forumId": "chat", "title": "نظرسنجی آزمون", "body": "نظر بدهید لطفاً",
+    t_p = data(ta, "forumCreateTopic", {"forumId": "heart", "title": "نظرسنجی آزمون", "body": "نظر بدهید لطفاً",
                                         "poll": {"question": "کدام؟", "options": ["الف", "ب"], "days": "x"}})["id"]
     check("poll options as string refused", rejected(act(tb, "forumVote", {"topicId": t_p, "options": "1"})))
     check("poll option out of range refused", rejected(act(tb, "forumVote", {"topicId": t_p, "options": [5]})))
     check("poll option dict refused", rejected(act(tb, "forumVote", {"topicId": t_p, "options": [{"a": 1}]})))
-    check("poll options as string on create refused", rejected(act(ta, "forumCreateTopic", {"forumId": "chat", "title": "نظرسنجی بد",
+    check("poll options as string on create refused", rejected(act(ta, "forumCreateTopic", {"forumId": "heart", "title": "نظرسنجی بد",
                                                                                             "body": "متن کافی", "poll": {"options": "ab"}})))
     act(at, "forumModerate", {"topicId": t_p, "op": "lock"})
     check("locked poll refuses votes", rejected(act(tb, "forumVote", {"topicId": t_p, "options": [0]})))
@@ -114,7 +114,7 @@ def main():
         ("forumTopics", {"page": "abc", "size": [], "forumId": junk}), ("forumTopics", {"groupId": 5, "authorId": junk}),
         ("forumTopic", {"topicId": t_l, "page": "zz"}), ("forumTopic", {"topicId": junk}),
         ("forumCreateTopic", {"forumId": junk, "title": "عنوان سالم", "body": "متن سالم کافی"}),
-        ("forumCreateTopic", {"forumId": "chat", "title": 12345, "body": ["x"]}),
+        ("forumCreateTopic", {"forumId": "heart", "title": 12345, "body": ["x"]}),
         ("forumReply", {"topicId": t_l, "body": {"a": 1}}), ("forumEdit", {"id": junk, "body": 3}),
         ("forumLike", {"id": [1]}), ("forumModerate", {"topicId": t_l, "op": "move", "forumId": junk}),
         ("learnList", {"page": "x", "categoryId": junk}), ("learnGet", {"id": 7}),
@@ -164,7 +164,7 @@ def main():
     act(td, "unblockUser", {"targetUserId": ub})
 
     # ---- edits / learning library ----------------------------------------------------------------------
-    t_r = data(tb, "forumCreateTopic", {"forumId": "chat", "title": "موضوعی برای حذف", "body": "متن کافی برای حذف"})["id"]
+    t_r = data(tb, "forumCreateTopic", {"forumId": "heart", "title": "موضوعی برای حذف", "body": "متن کافی برای حذف"})["id"]
     act(tb, "forumDelete", {"id": t_r})
     check("can't edit a removed topic", rejected(act(tb, "forumEdit", {"id": t_r, "body": "ویرایشِ پس از حذف"})))
     cov = upload(tb)
@@ -190,13 +190,13 @@ def main():
     cid = data(tb, "requestConversation", {"recipientUserId": uc})["id"]
     act(tc, "declineConversation", {"conversationId": cid})
     check("declined conversation can't be accepted later", rejected(act(tc, "acceptConversation", {"conversationId": cid})))
-    t_w = data(ta, "forumCreateTopic", {"forumId": "chat", "title": "عنوان بی‌خط‌زیر", "body": "متن ساده"})["id"]
+    t_w = data(ta, "forumCreateTopic", {"forumId": "heart", "title": "عنوان بی‌خط‌زیر", "body": "متن ساده"})["id"]
     check("LIKE wildcards are literal", all(t["id"] != t_w for t in data(tb, "forumTopics", {"q": "_"})["items"]))
     exp = data(ta, "exportMyData")["json"]
     check("export carries forum topics", t_w in exp and "forumReplies" in exp)
 
     # ---- coordinator findings ------------------------------------------------------------------------------
-    t_pg = data(ta, "forumCreateTopic", {"forumId": "chat", "title": "شمارش صفحه‌ها", "body": "متن کافی صفحه"})["id"]
+    t_pg = data(ta, "forumCreateTopic", {"forumId": "heart", "title": "شمارش صفحه‌ها", "body": "متن کافی صفحه"})["id"]
     check("first reply -> 1 page", data(tb, "forumReply", {"topicId": t_pg, "body": "اولین پاسخ"})["pages"] == 1)
     act(tb, "blockUser", {"targetUserId": ud})
     pr = act(tb, "userProfile", {"userId": ud})
