@@ -85,8 +85,8 @@ class ServerStore(val api: HamrahApi, private val context: android.content.Conte
     val currentUserId: StateFlow<String?> get() = mirror.currentUserId
 
     init {
-        // One owner for 401 handling: HamrahApi tells us, we sign out exactly once.
-        api.onUnauthorized = { _sessionExpired.value = true; signOut() }
+        // One owner for 401 handling: HamrahApi tells us. A device account is first re-opened silently.
+        api.onUnauthorized = { onUnauthorized() }
         // A push arrived / the user tapped one: fetch now instead of waiting for the next 30 s poll.
         scope.launch { refreshRequests.collect { runCatching { refresh(force = true) } } }
     }
@@ -110,8 +110,12 @@ class ServerStore(val api: HamrahApi, private val context: android.content.Conte
     suspend fun onAuthenticated(resp: AuthResponse) {
         _sessionExpired.value = false
         _offline.value = false
+        // Reminders kept through an expired session belong to the previous account: a different one starts clean.
+        if (api.lastUid != null && api.lastUid != resp.user.id) runCatching { Reminders.clearAll(appContext) }
         api.token = resp.token
         api.savedUid = resp.user.id
+        api.lastUid = resp.user.id
+        api.deviceAccount = resp.user.email == null
         etag = null
         version.incrementAndGet()
         // Seed the mirror with at least the signed-in user so the UI has something immediately.
@@ -167,6 +171,12 @@ class ServerStore(val api: HamrahApi, private val context: android.content.Conte
         etag = newEtag
         version.incrementAndGet()
         val uid = mirror.currentUserId.value
+        // Sessions opened by 1.4.0 have no account-kind flag yet: learn it from the own user record.
+        if (uid != null) db.users.firstOrNull { it.id == uid }?.let { me ->
+            val dev = me.email == null
+            if (api.deviceAccount != dev) api.deviceAccount = dev
+            if (api.lastUid != uid) api.lastUid = uid
+        }
         if (uid != null && raw != null) persistState(uid, newEtag, raw)
     }
 
@@ -198,15 +208,66 @@ class ServerStore(val api: HamrahApi, private val context: android.content.Conte
         }.onFailure { runCatching { cacheFile.delete() } }
     }
 
+    // ------------------------------------------------------------------ expired session (401)
+
+    private val reopening = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    private fun isDeviceAccount(): Boolean {
+        if (api.deviceAccount) return true
+        val uid = mirror.currentUserId.value ?: return false
+        val me = mirror.state.value.users.firstOrNull { it.id == uid } ?: return false
+        return me.email == null
+    }
+
+    /**
+     * The server rejected the session. An email account is signed out (the user must type the password again),
+     * but its local reminders keep ringing. A device account has nothing to type: it is re-opened silently with
+     * the device id — WITHOUT accepting terms, so the server can only return the existing account, never create one.
+     */
+    private fun onUnauthorized() {
+        val rejected = api.token
+        val uid = api.savedUid
+        if (rejected == null || uid == null || !isDeviceAccount()) { expire(); return }
+        if (!reopening.compareAndSet(false, true)) return
+        scope.launch {
+            try {
+                val id = runCatching {
+                    android.provider.Settings.Secure.getString(appContext.contentResolver, android.provider.Settings.Secure.ANDROID_ID)
+                }.getOrNull().orEmpty()
+                when (val r = api.device(argsJson("device" to id))) {
+                    is ApiResult.Ok -> {
+                        if (r.data.user.id != uid) { expire(); return@launch }
+                        val adopted = synchronized(this@ServerStore) {
+                            if (api.token == rejected) { api.token = r.data.token; etag = null; true } else false
+                        }
+                        if (adopted) { _sessionExpired.value = false; refresh(force = true) }
+                    }
+                    is ApiResult.Fail -> if (!r.network) expire()   // blocked / gone. Offline: keep everything, retry on the next poll.
+                }
+            } finally {
+                reopening.set(false)
+            }
+        }
+    }
+
+    private fun expire() {
+        _sessionExpired.value = true
+        signOut(keepReminders = true)
+    }
+
     // ------------------------------------------------------------------ sign-out
 
     /**
      * Ends the session. The token is cleared synchronously FIRST (so nothing can keep using it), then
      * everything user-specific on the device is wiped, then a best-effort, time-boxed push
      * unregistration is sent with the old token. The biometric credential vault is intentionally untouched.
+     *
+     * [keepReminders]: an EXPIRED session (not a sign-out the user asked for) leaves medication and schedule
+     * alarms in place — a missed dose is worse than a stale alarm. They are replaced at the next sign-in,
+     * or cleared if a different account signs in.
      */
     @Synchronized
-    fun signOut() {
+    fun signOut(keepReminders: Boolean = false) {
         val oldToken = api.token
         api.clearSession()
         poller?.cancel(); poller = null
@@ -216,7 +277,7 @@ class ServerStore(val api: HamrahApi, private val context: android.content.Conte
         mirror.state.value = Db()
         _offline.value = false
         runCatching { cacheFile.delete() }
-        runCatching { Reminders.clearAll(appContext) }
+        if (!keepReminders) runCatching { Reminders.clearAll(appContext) }
         runCatching { SpeechCache.clear(appContext) }
         runCatching { ImageDiskCache.clear(appContext) }
         runCatching { com.hamraheteyf.app.net.FileUrls.clear() }
@@ -250,7 +311,7 @@ class ServerStore(val api: HamrahApi, private val context: android.content.Conte
                     if (t - lastReconcile >= RECONCILE_GAP_MS) {
                         lastReconcile = t
                         runCatching { Reminders.reconcileAppointments(appContext, RecClient(api)) }
-                        if (api.token == null) runCatching { Reminders.clearAll(appContext) }  // signed out mid-flight
+                        if (api.token == null && !_sessionExpired.value) runCatching { Reminders.clearAll(appContext) }  // signed out mid-flight
                     }
                     delay(POLL_INTERVAL_MS)
                 }

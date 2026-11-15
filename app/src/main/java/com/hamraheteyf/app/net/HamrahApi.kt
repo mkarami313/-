@@ -105,11 +105,30 @@ class HamrahApi(context: Context) {
         get() = prefs.getString("uid", null)
         set(v) = prefs.edit().apply { if (v == null) remove("uid") else putString("uid", v) }.apply()
 
+    /** True for a «شروع بدونِ ثبت‌نام» account (no email/password): its session can be re-opened silently with the device id. */
+    var deviceAccount: Boolean
+        get() = prefs.getBoolean(KEY_DEVICE, false)
+        set(v) = prefs.edit().putBoolean(KEY_DEVICE, v).apply()
+
+    /** Uid of the last account signed in on this phone. Survives sign-out: local reminders belong to it. */
+    var lastUid: String?
+        get() = prefs.getString(KEY_LAST_UID, null)
+        set(v) = prefs.edit().apply { if (v == null) remove(KEY_LAST_UID) else putString(KEY_LAST_UID, v) }.apply()
+
+    /**
+     * Sliding session: the server answers a token older than a day with a fresh one in a response header.
+     * It replaces the stored token only if that is still the one this request was sent with (never a newer login).
+     */
+    private fun adoptRenewed(sent: String?, renewed: String?) {
+        if (sent == null || renewed.isNullOrBlank() || renewed == sent) return
+        synchronized(this) { if (token == sent) token = renewed }
+    }
+
     fun clearSession() {
         synchronized(this) {
             tokenCache = null
             tokenLoaded = true
-            prefs.edit().remove(KEY_TOKEN).remove(KEY_TOKEN_ENC).remove("uid").commit()
+            prefs.edit().remove(KEY_TOKEN).remove(KEY_TOKEN_ENC).remove("uid").remove(KEY_DEVICE).commit()
         }
     }
 
@@ -118,6 +137,9 @@ class HamrahApi(context: Context) {
     private companion object {
         const val KEY_TOKEN = "token"
         const val KEY_TOKEN_ENC = "token_enc"
+        const val KEY_DEVICE = "device_account"
+        const val KEY_LAST_UID = "last_uid"
+        const val RENEW_HEADER = "X-Hamrah-Token"
         const val NET_ERR = "خطای ارتباط با سرور. اتصال اینترنت را بررسی کنید."
     }
 
@@ -152,13 +174,15 @@ class HamrahApi(context: Context) {
             c.connectTimeout = 15000
             c.readTimeout = 30000
             c.setRequestProperty("Accept", "application/json")
-            if (auth) (tokenOverride ?: token)?.let { c.setRequestProperty("Authorization", "Bearer $it") }
+            val sent = if (auth) (tokenOverride ?: token) else null
+            sent?.let { c.setRequestProperty("Authorization", "Bearer $it") }
             if (bodyJson != null) {
                 c.doOutput = true
                 c.setRequestProperty("Content-Type", "application/json; charset=utf-8")
                 c.outputStream.use { it.write(bodyJson.toByteArray(Charsets.UTF_8)) }
             }
             val code = c.responseCode
+            if (code in 200..299 && tokenOverride == null) adoptRenewed(sent, c.getHeaderField(RENEW_HEADER))
             // An error reply without a body (e.g. a bare 401 from a proxy) has no errorStream, and reading
             // inputStream then throws — which used to turn "session expired" into a fake network error.
             val text = if (code in 200..299) c.inputStream.bufferedReader(Charsets.UTF_8).use(BufferedReader::readText)
