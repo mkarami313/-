@@ -47,6 +47,7 @@ import traceback
 import urllib.request
 import urllib.parse
 import urllib.error
+import unicodedata
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import psycopg2
@@ -89,6 +90,11 @@ if len(_jwt) < 16 or _jwt == "change-me":
 JWT_SECRET = _jwt.encode("utf-8")
 PORT = int(_cfg("PORT", "8150"))
 TOKEN_TTL = int(_cfg("TOKEN_TTL_SECONDS", str(30 * 24 * 3600)))  # 30 days
+# Sliding renewal: a token older than this is answered with a fresh one in the X-Hamrah-Token
+# response header, so a session only ends after TOKEN_TTL of NOT using the app (clients that
+# don't know the header simply ignore it and keep the old behaviour).
+TOKEN_RENEW_AFTER = int(_cfg("TOKEN_RENEW_AFTER_SECONDS", str(24 * 3600)))
+RENEW_HEADER = "X-Hamrah-Token"
 
 # Outgoing mail (password-reset codes). All optional: without SMTP_HOST nothing is sent and the
 # admin path (adminIssueReset) stays the fallback.
@@ -375,8 +381,14 @@ def verify_token_full(token):
 
 
 def token_user(token):
+    r = token_user_full(token)
+    return r[0] if r else None
+
+
+def token_user_full(token):
     """Full auth check: signature + expiry + user still exists, is not BLOCKED/DELETED and the
-    token was issued after the user's tokensValidAfter (password reset / forced logout)."""
+    token was issued after the user's tokensValidAfter (password reset / forced logout).
+    -> (uid, iat) or None."""
     r = verify_token_full(token)
     if not r:
         return None
@@ -392,7 +404,7 @@ def token_user(token):
         return None
     if iat < int(u.get("tokensValidAfter", 0) or 0):
         return None
-    return uid
+    return uid, iat
 
 
 # --------------------------------------------------------------------------------------
@@ -751,6 +763,54 @@ def _blocked_ids(store, uid):
 
 # ---- User / professional / children / verification ----
 
+# Display names that would pass for staff. Matched after folding Arabic/Persian letter variants;
+# spaces, ZWNJ, tatweel, diacritics and punctuation are dropped first.
+_NAME_FOLD = str.maketrans({"ي": "ی", "ى": "ی", "ئ": "ی", "ك": "ک", "ة": "ه", "ۀ": "ه", "أ": "ا", "إ": "ا",
+                            "آ": "ا", "ٱ": "ا", "ؤ": "و"})
+_NAME_DROP = "\u200c\u200d\u200e\u200f\u0640\u061c\ufeff"
+RESERVED_NAME_WORDS = {"مدیر", "مدیران", "ناظر", "ناظران", "پشتیبان", "mod", "staff", "official"}
+RESERVED_NAME_PARTS = ("مدیریت", "مدیرسایت", "مدیرکل", "مدیرانجمن", "مدیربرنامه", "مدیرسامانه", "مدیرهمراه",
+                       "ادمین", "پشتیبانی", "همراهطیف", "متخصصتایید", "کارشناستایید", "تاییدشده",
+                       "admin", "support", "moderator", "hamrah")
+NAME_RESERVED = "این نام برای مدیران و پشتیبانیِ «همراهِ طیف» نگه داشته شده است؛ نام دیگری انتخاب کنید."
+NAME_TAKEN_BY_STAFF = "این نام با نامِ یکی از مدیران یا متخصصانِ تأییدشده یکی است؛ نام دیگری انتخاب کنید."
+
+
+def _name_words(name):
+    t = unicodedata.normalize("NFKC", str(name or "")).translate(_NAME_FOLD).lower()
+    t = "".join(ch for ch in t if not unicodedata.combining(ch) and ch not in _NAME_DROP)
+    return [w for w in re.split(r"[^0-9a-z\u0600-\u06ff]+", t) if w]
+
+
+def check_display_name(store, uid, name):
+    """Refuses a display name that impersonates staff: reserved words (مدیر، پشتیبانی، ادمین، نامِ برنامه…)
+    or the exact name of an admin / verified professional. Admins are exempt; `uid` is None at sign-up."""
+    me = store.get("users", uid) if uid else None
+    if me and me.get("isAdmin"):
+        return
+    words = _name_words(name)
+    joined = "".join(words)
+    if not joined:
+        raise ApiError("نام نمایشی را وارد کنید.")
+    if any(w in RESERVED_NAME_WORDS for w in words) or any(p in joined for p in RESERVED_NAME_PARTS):
+        raise ApiError(NAME_RESERVED)
+    pros = {p.get("userId") for p in store.all("professionals") if p.get("verificationStatus") == "VERIFIED"}
+    for u in store.all("users"):
+        if u.get("id") != uid and (u.get("isAdmin") or u.get("id") in pros) \
+                and "".join(_name_words(u.get("displayName"))) == joined:
+            raise ApiError(NAME_TAKEN_BY_STAFF)
+
+
+_OWN_PHOTO_RE = re.compile(r"(?:^|/)files/([0-9a-f]{32})(?:\?.*)?$")
+_SAFE_PHOTO_RE = re.compile(r"files/[0-9a-f]{32}")
+
+
+def safe_photo(url):
+    """An avatar is only ever one of OUR uploaded files. Anything else (an outside URL saved before
+    this rule) is not handed to other people's phones, which would fetch it and leak their IP."""
+    return url if isinstance(url, str) and _SAFE_PHOTO_RE.fullmatch(url) else None
+
+
 def a_updateProfile(store, uid, args):
     _require(uid)
     if not _s(args.get("displayName")):
@@ -758,7 +818,10 @@ def a_updateProfile(store, uid, args):
     u = store.get("users", uid)
     if not u:
         raise ApiError("حساب یافت نشد.")
-    u["displayName"] = _s(args.get("displayName"))[:60]
+    new_name = _s(args.get("displayName"))[:60]
+    if new_name != u.get("displayName"):  # an unchanged (older) name never blocks editing city/bio/photo
+        check_display_name(store, uid, new_name)
+    u["displayName"] = new_name
     u["city"] = _s(args.get("city"))[:60] or None
     u["bio"] = _s(args.get("bio"))[:600] or None
     old_pid = u.get("photoId")
@@ -771,9 +834,16 @@ def a_updateProfile(store, uid, args):
         _check_file_ownership(store, uid, [pid], image_only=True)
         u["photoId"], u["photoUrl"] = pid, "files/%s" % pid
     else:  # absent/null never wipes the photo
+        # A free-form photoUrl is no longer stored (it let a user plant a tracking URL that every
+        # viewer's phone fetched). It is honoured only when it names one of the caller's own images.
         photo = args.get("photoUrl")
-        if isinstance(photo, str) and photo.strip():
-            u["photoUrl"] = photo.strip()[:500]
+        m = _OWN_PHOTO_RE.search(photo.strip()) if isinstance(photo, str) else None
+        if m and m.group(1) != old_pid:
+            try:
+                _check_file_ownership(store, uid, [m.group(1)], image_only=True)
+                u["photoId"], u["photoUrl"] = m.group(1), "files/%s" % m.group(1)
+            except ApiError:
+                pass
     if old_pid and old_pid != u.get("photoId"):
         _drop_file(store, uid, old_pid)
     u["updatedAt"] = now_ms()
@@ -1091,8 +1161,10 @@ def _unlink_file(doc):
 def a_changePassword(store, uid, args):
     _require(uid)
     u = store.get("users", uid)
-    if not u or not u.get("email"):
+    if not u:
         raise ApiError("حساب یافت نشد.")
+    if not u.get("email"):
+        raise ApiError("این حساب بدون رمز ساخته شده و رمزی برای تغییر ندارد.")
     cur_pw, new_pw = args.get("current"), args.get("new")
     key = "chpw:" + uid
     if RL.blocked(key, 5, 900):
@@ -1121,6 +1193,13 @@ def a_deleteAccount(store, uid, args):
     u = store.get("users", uid)
     if not u:
         raise ApiError("حساب یافت نشد.")
+    if not u.get("email"):
+        # Device account («شروع بدونِ ثبت‌نام»): there is no password to ask for. The signed-in
+        # session plus an explicit confirmation is the proof; nothing else could ever be supplied.
+        if args.get("confirm") is not True:
+            raise ApiError("برای حذف حساب، حذف را تأیید کنید (در صورت نیاز برنامه را به‌روز کنید).")
+        wipe_account(store, uid)
+        return
     pw = args.get("password")
     if not isinstance(pw, str) or not pw:
         raise ApiError("برای حذف حساب، رمز عبور را وارد کنید (در صورت نیاز برنامه را به‌روز کنید).")
@@ -2157,7 +2236,9 @@ def a_donationRemove(store, uid, args):
 
 
 
-CORE_FEATURES = {"home", "profile"}
+# Never switchable: «خانه», «من» (settings and the admin panel live there) and «انجمن» — the home feed is
+# built from the forum, so without it the first screen of every app version is an error page.
+CORE_FEATURES = {"home", "profile", "qa"}
 KNOWN_FEATURES = {"home", "qa", "groups", "messages", "guides", "directory", "donations", "childfile", "booking", "tools", "courses", "places", "profile", "cards"}
 
 
@@ -2169,6 +2250,8 @@ def disabled_features(store):
 def set_feature(store, fid, enabled):
     if fid in CORE_FEATURES:
         raise ApiError("این بخش پایه است و خاموش نمی‌شود.")
+    if fid not in KNOWN_FEATURES:
+        raise ApiError("بخش نامعتبر است.")
     doc = store.get("config", "features") or {"id": "features", "disabled": []}
     off = set(doc.get("disabled", []))
     (off.discard if enabled else off.add)(fid)
@@ -2181,8 +2264,11 @@ def a_setFeatureEnabled(store, uid, args):
     if not is_admin(store, uid):
         raise ApiError("دسترسی مدیر لازم است.")
     fid = _s(args.get("id"))
-    set_feature(store, fid, bool(args.get("enabled")))
-    _log_admin(store, uid, "SET_FEATURE", "FEATURE", fid, "enabled=%s" % bool(args.get("enabled")))
+    if not isinstance(args.get("enabled"), bool):
+        raise ApiError("وضعیتِ روشن/خاموش نامعتبر است.")
+    set_feature(store, fid, args["enabled"])
+    _log_admin(store, uid, "SET_FEATURE", "FEATURE", fid, "enabled=%s" % args["enabled"])
+    return {"disabled": sorted(disabled_features(store)), "locked": sorted(CORE_FEATURES)}
 
 
 # ---- Generic records: child file, tools, booking, courses, places/events ----
@@ -2840,6 +2926,7 @@ def a_adminStats(store, uid, args):
         "records": {k: sum(1 for d in store.all("r_" + k) if d.get("status") != "REMOVED") for k in REC_KINDS},
         "files": {"count": len(files), "bytes": sum(int(f.get("size", 0) or 0) for f in files)},
         "moduleRoles": module_roles(store),
+        "disabledFeatures": sorted(disabled_features(store)), "lockedFeatures": sorted(CORE_FEATURES),
         "disabledFeatures": disabled_features(store),
         "smtpConfigured": smtp_configured(),
         "generatedAt": now,
@@ -3211,7 +3298,7 @@ def _sweeper_loop():
 # GET /api/files/<id> is accepted with a valid ?exp&sig, or a Bearer of a user allowed to read the
 # file, or (only while FILES_ENFORCE is off, for 0.13 clients) as a bare capability URL.
 
-FILES_ENFORCE = os.environ.get("FILES_ENFORCE", "").strip().lower() in ("1", "true", "yes", "on")
+FILES_ENFORCE = _cfg("FILES_ENFORCE").strip().lower() in ("1", "true", "yes", "on")
 FILE_URL_TTL = 24 * 3600
 FILE_LINK_BAD = "پیوند فایل منقضی یا نامعتبر است."
 
@@ -3563,7 +3650,7 @@ def _author(store, aid, pros=None, anonymous=False, viewer=None, admin=False):
     elif u.get("accountType") == "FAMILY":
         badge = "خانواده"
     return {"id": aid if u else "", "name": u.get("displayName") or "کاربرِ حذف‌شده",
-            "photoUrl": u.get("photoUrl"), "badge": badge, "expert": aid in pros,
+            "photoUrl": safe_photo(u.get("photoUrl")), "badge": badge, "expert": aid in pros,
             "anonymous": bool(anonymous)}
 
 
@@ -3869,8 +3956,10 @@ def a_forumHome(store, uid, args):
     hot = a_forumTopics(store, uid, {"sort": "hot", "size": 8})["items"]
     clinic = a_forumTopics(store, uid, {"clinic": True, "sort": "active", "size": 6})["items"]
     fresh = a_forumTopics(store, uid, {"sort": "new", "size": 6})["items"]
-    learn = _learn_cards(store, uid, _q("SELECT * FROM l_items WHERE status='PUBLISHED' "
-                                       "ORDER BY featured DESC, published_at DESC LIMIT 10"))
+    # «آموزش‌ها» switched off (or not for this role): no learning cards on the home feed either —
+    # they would open into "این بخش برای شما فعال نیست".
+    learn = [] if "guides" in blocked_modules(store, uid) else _learn_cards(
+        store, uid, _q("SELECT * FROM l_items WHERE status='PUBLISHED' ORDER BY featured DESC, published_at DESC LIMIT 10"))
     unread = (_q("SELECT count(*) AS n FROM f_follows f JOIN f_topics t ON t.id=f.topic_id "
                  "LEFT JOIN f_reads r ON r.topic_id=t.id AND r.user_id=f.user_id "
                  "WHERE f.user_id=%s AND t.status='PUBLISHED' AND (r.read_at IS NULL OR r.read_at < t.last_post_at) "
@@ -4719,6 +4808,7 @@ def build_state(store, uid):
             return u
         # Strip fields that are private to the owner (and admins, via the admin panel).
         pu = dict(u)
+        pu["photoUrl"] = safe_photo(u.get("photoUrl"))
         for k in ("email", "deviceKey", "blockedUserIds", "notificationSettings", "tokensValidAfter", "lastSeenAt"):
             pu.pop(k, None)
         if not admin:  # honour the owner's privacy switches (city hidden by default, bio shown by default)
@@ -4849,6 +4939,7 @@ def do_register(args, ip):
     password = args.get("password")
     if not name or len(name) > 60:
         raise ApiError("نام نمایشی را وارد کنید (حداکثر ۶۰ نویسه).")
+    check_display_name(Store(), None, name)
     if not EMAIL_RE.match(mail) or len(mail) > 120:
         raise ApiError("ایمیل معتبر وارد کنید.")
     if not isinstance(password, str) or len(password) < 6:
@@ -4892,7 +4983,11 @@ def do_device(args, ip):
             raise ApiError(TOO_MANY)
         if not args.get("acceptedTerms"):
             raise ApiError("برای ادامه، قوانین و حریم خصوصی را بپذیرید.")
-        name = _s(args.get("displayName"))[:60] or ("همراه " + str(secrets.randbelow(9000) + 1000))
+        name = _s(args.get("displayName"))[:60]
+        if name:
+            check_display_name(store, None, name)
+        else:
+            name = "همراه " + str(secrets.randbelow(9000) + 1000)
         uid = new_id("u")
         user = {
             "id": uid, "displayName": name, "accountType": "FAMILY", "email": None, "deviceKey": key,
@@ -5189,6 +5284,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         for k, v in (extra or {}).items():
             self.send_header(k, v)
+        renew = getattr(self, "_renew", None)
+        if renew and code == 200:
+            self._renew = None
+            # Re-checked at send time: an action that just revoked the caller's sessions (password
+            # change, sign-out everywhere, account deletion) must not hand out a token it killed.
+            if token_user(renew):
+                self.send_header(RENEW_HEADER, renew)
         self.end_headers()
         self.wfile.write(body)
 
@@ -5203,10 +5305,14 @@ class Handler(BaseHTTPRequestHandler):
         auth = self.headers.get("Authorization", "")
         if not auth.startswith("Bearer "):
             return None
-        uid = token_user(auth[7:])
-        if uid:
-            self._log_uid = uid
-            touch_user(uid)
+        r = token_user_full(auth[7:])
+        if not r:
+            return None
+        uid, iat = r
+        self._log_uid = uid
+        touch_user(uid)
+        if time.time() - iat >= TOKEN_RENEW_AFTER:
+            self._renew = make_token(uid)
         return uid
 
     def _clen(self):
@@ -5241,6 +5347,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         self._t0 = time.time()
+        self._renew = None
         try:
             self._get()
         except ApiError as e:
@@ -5250,6 +5357,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         self._t0 = time.time()
+        self._renew = None
         try:
             self._post()
         except ApiError as e:
