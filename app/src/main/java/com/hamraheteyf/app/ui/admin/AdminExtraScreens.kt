@@ -23,6 +23,7 @@ import com.hamraheteyf.app.ui.common.*
 import com.hamraheteyf.app.ui.modules.ConfirmDialog
 import com.hamraheteyf.app.ui.navigation.AppFeatures
 import com.hamraheteyf.app.ui.navigation.FeatureFlags
+import com.hamraheteyf.app.ui.navigation.ModuleSwitches
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.*
 
@@ -30,7 +31,6 @@ private val RoleLabels = listOf(
     "FAMILY" to "خانواده", "PROFESSIONAL" to "متخصص سلامت", "EDUCATOR" to "مربی",
     "SOCIAL_WORKER" to "مددکار/مشاور", "COMMUNITY" to "عضو جامعه",
 )
-private val CoreIds = setOf("home", "profile")
 
 private fun copyText(c: Context, label: String, text: String) {
     (c.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText(label, text))
@@ -49,46 +49,100 @@ fun AdminModulesTab(onMessage: (String) -> Unit) {
     val ctx = LocalContext.current
     var roles by remember { mutableStateOf<Map<String, List<String>>?>(null) }
     var editing by remember { mutableStateOf<Pair<String, String>?>(null) }
-    LaunchedEffect(call) {
-        val r = call?.call("adminStats")
-        if (r is ApiResult.Ok) {
-            // Shape-tolerant: a throwing .jsonObject/.jsonArray inside LaunchedEffect crashes the whole app.
-            roles = (r.data["moduleRoles"] as? JsonObject)?.mapValues { e ->
-                (e.value as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty()
+    // Which sections can never be switched off: the server's list when it sends one, else the built-in one.
+    var locked by remember { mutableStateOf(ModuleSwitches.LOCKED) }
+    var loaded by remember { mutableStateOf(false) }
+    var loadError by remember { mutableStateOf<String?>(null) }
+    var busyId by remember { mutableStateOf<String?>(null) }
+    var confirmOff by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var reload by remember { mutableIntStateOf(0) }
+
+    fun strings(el: JsonElement?): Set<String>? =
+        (el as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }?.toSet()
+
+    LaunchedEffect(call, reload) {
+        // The switches show what the SERVER says right now, not what this phone last cached.
+        when (val r = call?.call("adminStats")) {
+            is ApiResult.Ok -> {
+                // Shape-tolerant: a throwing .jsonObject/.jsonArray inside LaunchedEffect crashes the whole app.
+                roles = (r.data["moduleRoles"] as? JsonObject)?.mapValues { e ->
+                    (e.value as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty()
+                }
+                strings(r.data["disabledFeatures"])?.let { FeatureFlags.update(ctx, it) }
+                strings(r.data["lockedFeatures"])?.let { locked = it + ModuleSwitches.LOCKED }
+                loaded = true; loadError = null
             }
+            is ApiResult.Fail -> loadError = r.message
+            null -> Unit
         }
     }
-    val mods = AppFeatures.all.filter { it.id !in CoreIds }
+
+    fun toggle(id: String, title: String, on: Boolean) {
+        if (busyId != null) return
+        busyId = id
+        scope.launch {
+            val res = call?.call("setFeatureEnabled", buildJsonObject { put("id", id); put("enabled", on) })
+            // The switch reads FeatureFlags, which only the periodic sync updated: it snapped back
+            // after a successful toggle, so the admin thought it had failed.
+            if (res is ApiResult.Ok) {
+                val cur = FeatureFlags.disabled.value
+                FeatureFlags.update(ctx, strings(res.data["disabled"]) ?: ModuleSwitches.afterToggle(cur, id, on))
+            }
+            busyId = null
+            onMessage(if (res is ApiResult.Fail) res.message else if (on) "«$title» روشن شد." else "«$title» خاموش شد.")
+        }
+    }
+
+    val mods = AppFeatures.all
     LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        item { InfoBanner("خاموش‌کردن یک ماژول آن را برای همه پنهان می‌کند. «نقش‌ها» دسترسی را به نقش‌های انتخاب‌شده محدود می‌کند (مدیر همیشه دسترسی دارد).", dismissKey = "admin_modules_hint") }
-        items(mods, key = { it.id }) { f ->
-            val on = f.id !in disabled
-            val r = roles?.get(f.id).orEmpty()
-            Card(Modifier.fillMaxWidth()) {
-                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(f.title, style = MaterialTheme.typography.titleSmall)
-                        Text(
-                            if (r.isEmpty()) "نقش‌ها: همه" else "نقش‌ها: " + r.joinToString("، ") { id -> RoleLabels.firstOrNull { it.first == id }?.second ?: id },
-                            style = MaterialTheme.typography.bodySmall, color = mutedColor(),
-                        )
-                    }
-                    TextButton(onClick = { editing = f.id to f.title }) { Text("نقش‌ها") }
-                    Switch(checked = on, onCheckedChange = { v ->
-                        scope.launch {
-                            val res = call?.call("setFeatureEnabled", buildJsonObject { put("id", f.id); put("enabled", v) })
-                            // The switch reads FeatureFlags, which only the periodic sync updated: it snapped back
-                            // after a successful toggle, so the admin thought it had failed.
-                            if (res is ApiResult.Ok) {
-                                val cur = FeatureFlags.disabled.value
-                                FeatureFlags.update(ctx, if (v) cur - f.id else cur + f.id)
-                            }
-                            onMessage(if (res is ApiResult.Fail) res.message else if (v) "«${f.title}» روشن شد." else "«${f.title}» خاموش شد.")
-                        }
-                    })
+        item { InfoBanner("خاموش‌کردن یک بخش آن را برای همهٔ کاربران پنهان می‌کند (چیزی حذف نمی‌شود و با روشن‌کردن برمی‌گردد). تغییر حداکثر تا نیم دقیقه بعد در اپِ بازِ کاربران دیده می‌شود. «نقش‌ها» دسترسی را به نقش‌های انتخاب‌شده محدود می‌کند (مدیر همیشه دسترسی دارد).", dismissKey = "admin_modules_hint2") }
+        loadError?.let { e ->
+            item(key = "load-error") {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("وضعیتِ بخش‌ها از سرور خوانده نشد: $e", Modifier.weight(1f), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = { reload++ }) { Text("تلاش دوباره") }
                 }
             }
         }
+        items(mods, key = { it.id }) { f ->
+            val isLocked = f.id in locked
+            val on = isLocked || f.id !in disabled
+            val r = roles?.get(f.id).orEmpty()
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(f.title, style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                when {
+                                    isLocked -> "بخشِ پایه؛ همیشه روشن"
+                                    r.isEmpty() -> (if (on) "روشن" else "خاموش") + " · نقش‌ها: همه"
+                                    else -> (if (on) "روشن" else "خاموش") + " · نقش‌ها: " + r.joinToString("، ") { id -> RoleLabels.firstOrNull { it.first == id }?.second ?: id }
+                                },
+                                style = MaterialTheme.typography.bodySmall, color = mutedColor(),
+                            )
+                        }
+                        if (!isLocked) TextButton(onClick = { editing = f.id to f.title }) { Text("نقش‌ها") }
+                        Switch(
+                            checked = on, enabled = !isLocked && loaded && busyId == null,
+                            onCheckedChange = { v -> if (v) toggle(f.id, f.title, true) else confirmOff = f.id to f.title },
+                        )
+                    }
+                    ModuleSwitches.legacyWarning(f.id)?.let { w ->
+                        Text("⚠ $w", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 4.dp))
+                    }
+                }
+            }
+        }
+    }
+    confirmOff?.let { (id, title) ->
+        ConfirmDialog(
+            text = "«$title» برای همهٔ کاربران پنهان شود؟ داده‌ای حذف نمی‌شود و هر وقت بخواهید دوباره روشن می‌شود." +
+                (ModuleSwitches.legacyWarning(id)?.let { "\n\n$it" } ?: ""),
+            confirm = "خاموش کن",
+            onYes = { confirmOff = null; toggle(id, title, false) },
+            onDismiss = { confirmOff = null },
+        )
     }
     editing?.let { (id, title) ->
         val sel = remember(id) { mutableStateListOf<String>().also { it.addAll(roles?.get(id).orEmpty()) } }

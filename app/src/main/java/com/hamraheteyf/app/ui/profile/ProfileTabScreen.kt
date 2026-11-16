@@ -138,14 +138,18 @@ fun ProfileTabScreen(
             }
 
             // ---- my activity
+            val disabledFeatures by com.hamraheteyf.app.ui.navigation.FeatureFlags.disabled.collectAsState()
             ListSection("فعالیتِ من") {
                 MenuRow(Icons.Outlined.Forum, Teal, "گفتگوهای من") { onNavigate(Routes.FORUM) }
                 RowDivider()
                 MenuRow(Icons.Outlined.BookmarkBorder, Apricot, "نشان‌شده‌ها") { onNavigate(Routes.FORUM) }
-                RowDivider()
-                MenuRow(Icons.AutoMirrored.Outlined.Article, Expert, "مطالبِ من") { onNavigate(Routes.learnList(mode = "mine")) }
-                RowDivider()
-                MenuRow(Icons.Outlined.Bookmarks, Gold, "ذخیره‌شده‌ها") { onNavigate(Routes.learnList(mode = "saved")) }
+                // «آموزش‌ها» switched off by the admin: its two shortcuts go with it (they opened an error page).
+                if ("guides" !in disabledFeatures) {
+                    RowDivider()
+                    MenuRow(Icons.AutoMirrored.Outlined.Article, Expert, "مطالبِ من") { onNavigate(Routes.learnList(mode = "mine")) }
+                    RowDivider()
+                    MenuRow(Icons.Outlined.Bookmarks, Gold, "ذخیره‌شده‌ها") { onNavigate(Routes.learnList(mode = "saved")) }
+                }
             }
 
             // ---- account

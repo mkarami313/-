@@ -62,8 +62,9 @@ class ServerAuthRepository(private val store: ServerStore) : AuthRepository {
         }
     }
 
+    /** Device account (no password): the server takes an explicit confirmation instead. */
     override suspend fun deleteAccount(): DataResult<Unit> {
-        val r = store.actUnit("deleteAccount", "{}")
+        val r = store.actUnit("deleteAccount", argsJson("confirm" to true))
         if (r is DataResult.Success) store.signOut()
         return r
     }
